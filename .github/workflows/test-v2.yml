@@ -23,18 +23,19 @@ jobs:
           python -m playwright install --with-deps chromium
 
       - name: Run G-SMART ETLE V2 test
-        env:
-          EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
-          PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+       env:
+  EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
+  PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-          DATE_FROM: "01-08-2026"
+  SYNC_MODE: "test"
+  LOOKBACK_DAYS: "14"
+  TEST_LIMIT: "5"
 
-          SYNC_LIMIT: "0"
-          HEADLESS: "true"
-          REQUEST_DELAY: "0.5"
-          MAX_RETRY: "3"
-          PRINTED_PAGE_SIZE: "100"
+  HEADLESS: "true"
+  REQUEST_DELAY: "0.5"
+  MAX_RETRY: "3"
+  PRINTED_PAGE_SIZE: "100"
 
-        run: python sync_etle_v2.py
+        run: python sync_etle.py
