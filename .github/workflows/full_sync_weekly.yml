@@ -1,10 +1,15 @@
-name: Test G-SMART ETLE V3
+name: G-SMART ETLE Full Weekly
 
 on:
+  schedule:
+    # Setiap Minggu pukul 02:00 WIB
+    # GitHub Actions menggunakan UTC → Sabtu 19:00 UTC
+    - cron: '0 19 * * 6'
+
   workflow_dispatch:
 
 jobs:
-  test-v3:
+  full-sync:
     runs-on: ubuntu-latest
 
     steps:
@@ -14,28 +19,29 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install playwright supabase python-dotenv
           python -m playwright install --with-deps chromium
 
-      - name: Run G-SMART ETLE V3 test
+      - name: Run ETLE full sync
         env:
           EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
           PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-          SYNC_MODE: "test"
-          LOOKBACK_DAYS: "14"
-          TEST_LIMIT: "5"
+          SYNC_MODE: 'full'
+          DATE_FROM: '01-08-2026'
+          TEST_LIMIT: '0'
 
-          HEADLESS: "true"
-          REQUEST_DELAY: "0.5"
-          MAX_RETRY: "3"
-          PRINTED_PAGE_SIZE: "100"
+          HEADLESS: 'true'
+          REQUEST_DELAY: '0.5'
+          MAX_RETRY: '3'
+          PRINTED_PAGE_SIZE: '100'
 
-        run: python sync_etle.py
+        run: |
+          python sync_etle.py
