@@ -31,7 +31,7 @@ jobs:
 
           DATE_FROM: "01-08-2026"
 
-          SYNC_LIMIT: "5"
+          SYNC_LIMIT: "0"
           HEADLESS: "true"
           REQUEST_DELAY: "0.5"
           MAX_RETRY: "3"
