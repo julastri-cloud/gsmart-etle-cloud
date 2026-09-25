@@ -464,11 +464,48 @@ def sync_disputes(page,supabase):
         write_sync_log(supabase,"DISPUTES",started,"FAILED",found,ok,failed,str(e)); raise
 
 def get_terminated(page):
-    p={"dateFrom":ddmmyyyy_to_iso(DATE_FROM),"dateTo":ddmmyyyy_to_iso(DATE_TO),"_":int(time.time()*1000)}
-    parsed=browser_fetch(page,URL_TERMINATED+"?"+urlencode(p))
-    rows=parsed.get("data",[])
-    if not isinstance(rows,list): raise RuntimeError("JSON Dihentikan tidak dikenali.")
-    return rows[:SYNC_LIMIT] if SYNC_LIMIT>0 else rows
+    # Endpoint Pelanggaran Dihentikan menggunakan format tanggal campuran:
+    # dateFrom = YYYY-MM-DD
+    # dateTo   = DD-MM-YYYY
+    # Contoh request yang sudah terbukti menghasilkan data:
+    # ?dateFrom=2026-08-01&dateTo=25-09-2026
+
+    date_from_api = ddmmyyyy_to_iso(DATE_FROM)
+    date_to_api = DATE_TO
+
+    p = {
+        "dateFrom": date_from_api,
+        "dateTo": date_to_api,
+        "_": int(time.time() * 1000),
+    }
+
+    api_url = URL_TERMINATED + "?" + urlencode(p)
+
+    log(
+        "Mengambil Pelanggaran Dihentikan "
+        f"{date_from_api} s/d {date_to_api}..."
+    )
+
+    parsed = browser_fetch(page, api_url)
+
+    if not isinstance(parsed, dict):
+        raise RuntimeError("JSON Dihentikan bukan object.")
+
+    if parsed.get("status") is False:
+        raise RuntimeError(
+            "Endpoint Dihentikan mengembalikan status=false."
+        )
+
+    rows = parsed.get("data", [])
+
+    if not isinstance(rows, list):
+        raise RuntimeError("JSON Dihentikan tidak dikenali.")
+
+    log(
+        f"Pelanggaran Dihentikan ditemukan: {len(rows)} record."
+    )
+
+    return rows[:SYNC_LIMIT] if SYNC_LIMIT > 0 else rows
 
 def sync_terminated(page,supabase):
     started=now_iso(); found=ok=failed=0
