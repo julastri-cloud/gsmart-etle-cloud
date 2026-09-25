@@ -31,10 +31,13 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-          DATE_FROM: '01-08-2026'
+          SYNC_MODE: 'incremental'
+          LOOKBACK_DAYS: '14'
+          TEST_LIMIT: '0'
           HEADLESS: 'true'
-          SYNC_LIMIT: '0'
           REQUEST_DELAY: '0.5'
+          MAX_RETRY: '3'
+          PRINTED_PAGE_SIZE: '100'
 
         run: |
           python sync_etle.py
