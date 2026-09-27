@@ -31,6 +31,10 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
+          # WhatsApp Fonnte
+          FONNTE_TOKEN: ${{ secrets.FONNTE_TOKEN }}
+          WA_TARGET: ${{ secrets.WA_TARGET }}
+
           SYNC_MODE: 'incremental'
           LOOKBACK_DAYS: '14'
           TEST_LIMIT: '0'
