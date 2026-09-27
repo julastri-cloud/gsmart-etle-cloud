@@ -474,7 +474,7 @@ def build_printed_url(start, length, draw):
         "search[value]": "",
         "search[regex]": "false",
         "date": f"{DATE_FROM} 00:00",
-        "date1": f"{DATE_TO} 00:00",
+        "date1": f"{DATE_TO} 23:59",
         "selectAll": "no",
         "provinsi": "",
         "status": "Sudah_Dicetak",
@@ -828,7 +828,7 @@ def sync_blanko(page, supabase):
 # DISPUTES
 # ============================================================
 def get_disputes(page):
-    p = {"dateFrom": f"{DATE_FROM} 00:00", "dateTo": f"{DATE_TO} 00:00", "status": "Tersanggah", "_": int(time.time() * 1000)}
+    p = {"dateFrom": f"{DATE_FROM} 00:00", "dateTo": f"{DATE_TO} 23:59", "status": "Tersanggah", "_": int(time.time() * 1000)}
     parsed = browser_fetch(page, URL_DISPUTES + "?" + urlencode(p))
     rows = parsed.get("data", [])
     if not isinstance(rows, list): raise RuntimeError("JSON Tersanggah tidak dikenali")
