@@ -2,7 +2,10 @@ name: G-SMART ETLE to Supabase
 
 on:
   schedule:
+    # Sinkronisasi otomatis setiap 2 jam
     - cron: '0 */2 * * *'
+
+  # Bisa dijalankan manual dari GitHub Actions
   workflow_dispatch:
 
 jobs:
@@ -10,34 +13,63 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ======================================================
+      # 1. CHECKOUT REPOSITORY
+      # ======================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ======================================================
+      # 2. SETUP PYTHON
+      # ======================================================
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
+      # ======================================================
+      # 3. INSTALL DEPENDENCIES
+      # ======================================================
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright supabase python-dotenv
+          pip install playwright supabase python-dotenv requests
           python -m playwright install --with-deps chromium
 
+      # ======================================================
+      # 4. RUN ETLE SYNC
+      # ======================================================
       - name: Run ETLE sync
         env:
+
+          # --------------------------------------------------
+          # ETLE HUB
+          # --------------------------------------------------
           EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
           PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+
+          # --------------------------------------------------
+          # SUPABASE
+          # --------------------------------------------------
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-          # WhatsApp Fonnte
+          # --------------------------------------------------
+          # WHATSAPP FONNTE
+          # --------------------------------------------------
           FONNTE_TOKEN: ${{ secrets.FONNTE_TOKEN }}
           WA_TARGET: ${{ secrets.WA_TARGET }}
 
+          # --------------------------------------------------
+          # SYNC CONFIGURATION
+          # --------------------------------------------------
           SYNC_MODE: 'incremental'
           LOOKBACK_DAYS: '14'
           TEST_LIMIT: '0'
+
+          # --------------------------------------------------
+          # PLAYWRIGHT / REQUEST
+          # --------------------------------------------------
           HEADLESS: 'true'
           REQUEST_DELAY: '0.5'
           MAX_RETRY: '3'
