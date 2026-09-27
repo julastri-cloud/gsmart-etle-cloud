@@ -2,8 +2,10 @@ name: G-SMART ETLE to Supabase
 
 on:
   schedule:
-    # Sinkronisasi otomatis setiap 2 jam
-    - cron: '0 */2 * * *'
+    # Sinkronisasi otomatis setiap 3 jam WIB
+    # Jadwal: 00:17, 03:17, 06:17, 09:17, 12:17, 15:17, 18:17, 21:17
+    - cron: '17 */3 * * *'
+      timezone: 'Asia/Jakarta'
 
   # Bisa dijalankan manual dari GitHub Actions
   workflow_dispatch:
