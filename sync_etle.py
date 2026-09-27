@@ -50,6 +50,9 @@ if SYNC_MODE not in {"incremental", "full", "test"}:
 
 TODAY = datetime.now(WIB).date()
 DATE_TO = TODAY.strftime("%d-%m-%Y")
+# ETLE Hub memakai batas akhir timestamp secara eksklusif: awal hari berikutnya.
+# Contoh: data 27-09-2026 diambil dengan rentang hingga 28-09-2026 00:00.
+DATE_TO_NEXT = (TODAY + timedelta(days=1)).strftime("%d-%m-%Y")
 if SYNC_MODE == "full":
     DATE_FROM = FULL_DATE_FROM
 else:
@@ -474,7 +477,7 @@ def build_printed_url(start, length, draw):
         "search[value]": "",
         "search[regex]": "false",
         "date": f"{DATE_FROM} 00:00",
-        "date1": f"{DATE_TO} 23:59",
+        "date1": f"{DATE_TO_NEXT} 00:00",
         "selectAll": "no",
         "provinsi": "",
         "status": "Sudah_Dicetak",
@@ -828,7 +831,7 @@ def sync_blanko(page, supabase):
 # DISPUTES
 # ============================================================
 def get_disputes(page):
-    p = {"dateFrom": f"{DATE_FROM} 00:00", "dateTo": f"{DATE_TO} 23:59", "status": "Tersanggah", "_": int(time.time() * 1000)}
+    p = {"dateFrom": f"{DATE_FROM} 00:00", "dateTo": f"{DATE_TO_NEXT} 00:00", "status": "Tersanggah", "_": int(time.time() * 1000)}
     parsed = browser_fetch(page, URL_DISPUTES + "?" + urlencode(p))
     rows = parsed.get("data", [])
     if not isinstance(rows, list): raise RuntimeError("JSON Tersanggah tidak dikenali")
@@ -984,7 +987,8 @@ def main():
     print("G-SMART ETLE SYNC V3 - INCREMENTAL / FULL / TEST")
     print("=" * 76)
     log(f"Mode            : {SYNC_MODE}")
-    log(f"Rentang API     : {DATE_FROM} s/d {DATE_TO}")
+    log(f"Rentang tanggal : {DATE_FROM} s/d {DATE_TO}")
+    log(f"Batas timestamp : {DATE_FROM} 00:00 -> {DATE_TO_NEXT} 00:00")
     log(f"Lookback        : {LOOKBACK_DAYS} hari")
     log(f"Test limit      : {SYNC_LIMIT}")
 
