@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from urllib.parse import urlencode
 
+import requests
+
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 from supabase import create_client
@@ -31,6 +33,8 @@ EMAIL_ETLE = os.getenv("EMAIL_ETLE", "").strip()
 PASSWORD_ETLE = os.getenv("PASSWORD_ETLE", "").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+FONNTE_TOKEN = os.getenv("FONNTE_TOKEN", "").strip()
+WA_TARGET = os.getenv("WA_TARGET", "").strip()
 
 SYNC_MODE = os.getenv("SYNC_MODE", "incremental").strip().lower()
 FULL_DATE_FROM = os.getenv("DATE_FROM", "01-08-2026").strip()
@@ -253,6 +257,109 @@ def browser_fetch(page, url):
         return json.loads(body)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Response bukan JSON valid: {exc}; {body[:500]}")
+
+
+# ============================================================
+# WHATSAPP / FONNTE
+# ============================================================
+def wa_enabled():
+    return bool(FONNTE_TOKEN and WA_TARGET)
+
+
+def send_fonnte_message(message):
+    """
+    Kirim satu pesan WhatsApp melalui Fonnte.
+    Kegagalan WA tidak boleh menggagalkan sinkronisasi ETLE/Supabase.
+    """
+    if not wa_enabled():
+        log("WA Blast dilewati: FONNTE_TOKEN/WA_TARGET belum tersedia.")
+        return False
+
+    try:
+        response = requests.post(
+            "https://api.fonnte.com/send",
+            headers={"Authorization": FONNTE_TOKEN},
+            data={
+                "target": WA_TARGET,
+                "message": message,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+
+        # Fonnte umumnya mengembalikan JSON. Tetap toleran jika respons bukan JSON.
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {"raw": response.text[:500]}
+
+        # HTTP 2xx belum tentu berarti provider menerima request secara logis.
+        if isinstance(payload, dict):
+            status_value = payload.get("status")
+            if status_value is False or str(status_value).lower() == "false":
+                log(f"WA Blast gagal menurut respons Fonnte: {payload}")
+                return False
+
+        log(f"WA Blast berhasil dikirim ke target grup. Respons: {payload}")
+        return True
+    except Exception as exc:
+        log(f"WA Blast gagal, tetapi sync tetap dilanjutkan: {exc}")
+        return False
+
+
+def build_wa_notification(new_blanko, new_disputes):
+    """
+    Bangun satu rangkuman per run.
+    Hanya Blanko baru dan Tersanggah baru yang masuk notifikasi.
+    """
+    if not new_blanko and not new_disputes:
+        return None
+
+    lines = [
+        "📢 *G-SMART ETLE*",
+        "",
+        "Terdapat pembaruan data ETLE:",
+    ]
+
+    if new_blanko:
+        lines += [
+            "",
+            f"📄 *Blanko Tilang Baru: {len(new_blanko)}*",
+        ]
+        for row in new_blanko[:5]:
+            label = row.get("ref_number") or row.get("no_blanko") or row.get("violation_id") or "-"
+            tnkb = row.get("tnkb")
+            lines.append(f"• {label}" + (f" | {tnkb}" if tnkb else ""))
+        if len(new_blanko) > 5:
+            lines.append(f"• ... dan {len(new_blanko) - 5} data lainnya")
+
+    if new_disputes:
+        lines += [
+            "",
+            f"⚠️ *Pelanggaran Tersanggah Baru: {len(new_disputes)}*",
+        ]
+        for row in new_disputes[:5]:
+            label = row.get("ref_number") or row.get("violation_id") or "-"
+            tnkb = row.get("tnkb")
+            lines.append(f"• {label}" + (f" | {tnkb}" if tnkb else ""))
+        if len(new_disputes) > 5:
+            lines.append(f"• ... dan {len(new_disputes) - 5} data lainnya")
+
+    lines += [
+        "",
+        "Silakan buka aplikasi *G-SMART* untuk melihat detail.",
+        "",
+        "_Notifikasi otomatis G-SMART UPPKB Guyangan_",
+    ]
+    return "\n".join(lines)
+
+
+def send_sync_wa_notification(new_blanko, new_disputes):
+    message = build_wa_notification(new_blanko, new_disputes)
+    if not message:
+        log("WA Blast: tidak ada Blanko/Tersanggah baru.")
+        return False
+    return send_fonnte_message(message)
 
 # ============================================================
 # CASE RESOLUTION
@@ -661,12 +768,25 @@ def sync_normalized_blanko(supabase, item, d, legacy):
 
 def sync_blanko(page, supabase):
     started = now_iso(); found = ok = failed = 0
+    new_items = []
     try:
         rows = get_blanko_list(page); found = len(rows)
         for i, item in enumerate(rows, 1):
             vid = clean(item.get("violation_id"))
             if not vid:
                 failed += 1; continue
+
+            # "Baru" = violation_id belum ada di etle_blanko_detail SEBELUM upsert.
+            existing = (
+                supabase.table("etle_blanko_detail")
+                .select("violation_id")
+                .eq("violation_id", str(vid))
+                .limit(1)
+                .execute()
+                .data
+            )
+            is_new = not bool(existing)
+
             last = None
             for attempt in range(1, MAX_RETRY + 1):
                 try:
@@ -674,8 +794,18 @@ def sync_blanko(page, supabase):
                     legacy = build_legacy_row(item, d)
                     upsert(supabase, "etle_blanko_detail", legacy, "violation_id")
                     sync_normalized_blanko(supabase, item, d, legacy)
+
+                    # Catat sebagai baru HANYA setelah seluruh proses record berhasil.
+                    if is_new:
+                        new_items.append({
+                            "violation_id": str(vid),
+                            "ref_number": legacy.get("ref_number"),
+                            "no_blanko": legacy.get("no_blanko"),
+                            "tnkb": legacy.get("plat_number"),
+                        })
+
                     ok += 1; last = None
-                    log(f"[BLANKO {i}/{found}] {vid} -> OK")
+                    log(f"[BLANKO {i}/{found}] {vid} -> OK" + (" [BARU]" if is_new else ""))
                     break
                 except Exception as exc:
                     last = exc; log(f"[BLANKO {i}/{found}] retry {attempt}/{MAX_RETRY}: {exc}")
@@ -685,12 +815,14 @@ def sync_blanko(page, supabase):
                 failed += 1
             if REQUEST_DELAY > 0:
                 page.wait_for_timeout(int(REQUEST_DELAY * 1000))
+
         status = "SUCCESS" if failed == 0 else "PARTIAL"
         write_sync_log(supabase, "BLANKO", started, status, found, ok, failed)
         if failed == 0: update_sync_state(supabase, "BLANKO")
-        return {"found": found, "success": ok, "failed": failed}
+        return {"found": found, "success": ok, "failed": failed, "new": len(new_items), "new_items": new_items}
     except Exception as exc:
         write_sync_log(supabase, "BLANKO", started, "FAILED", found, ok, failed, str(exc)); raise
+
 
 # ============================================================
 # DISPUTES
@@ -705,6 +837,7 @@ def get_disputes(page):
 
 def sync_disputes(page, supabase):
     started = now_iso(); found = ok = failed = 0
+    new_items = []
     try:
         rows = get_disputes(page); found = len(rows)
         for i, item in enumerate(rows, 1):
@@ -718,6 +851,18 @@ def sync_disputes(page, supabase):
                     lokasi=item.get("lokasi"), tanggal_pelanggaran=item.get("vl_inserted_date"),
                     status_etle="TERSANGGAH", raw_data=item,
                 )
+
+                # "Baru" = case_id belum ada di etle_disputes SEBELUM upsert.
+                existing = (
+                    supabase.table("etle_disputes")
+                    .select("case_id")
+                    .eq("case_id", case["case_id"])
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+                is_new = not bool(existing)
+
                 conf = parse_datetime_any(item.get("confirmation_date"))
                 upsert(supabase, "etle_disputes", compact_row({
                     "case_id": case["case_id"], "violation_id": vid,
@@ -728,16 +873,34 @@ def sync_disputes(page, supabase):
                     "updated_at": now_iso(),
                 }), "case_id")
                 if conf:
-                    add_history_event(supabase, case["case_id"], "DISPUTE_RECEIVED", conf, "Pelanggaran disanggah", f"TNKB {item.get('plat_number')} | {item.get('pelanggaran')}", "ETLE_TERSANGGAH")
-                ok += 1; log(f"[TERSANGGAH {i}/{found}] {vid} -> OK")
+                    add_history_event(
+                        supabase, case["case_id"], "DISPUTE_RECEIVED", conf,
+                        "Pelanggaran disanggah",
+                        f"TNKB {item.get('plat_number')} | {item.get('pelanggaran')}",
+                        "ETLE_TERSANGGAH"
+                    )
+
+                # Catat sebagai baru HANYA setelah upsert berhasil.
+                if is_new:
+                    new_items.append({
+                        "case_id": case["case_id"],
+                        "violation_id": str(vid),
+                        "ref_number": clean(item.get("ref_number")) or case.get("ref_number"),
+                        "tnkb": clean(item.get("plat_number")) or case.get("tnkb"),
+                    })
+
+                ok += 1
+                log(f"[TERSANGGAH {i}/{found}] {vid} -> OK" + (" [BARU]" if is_new else ""))
             except Exception as exc:
                 failed += 1; log(f"[TERSANGGAH {i}/{found}] GAGAL: {exc}")
+
         status = "SUCCESS" if failed == 0 else "PARTIAL"
         write_sync_log(supabase, "DISPUTES", started, status, found, ok, failed)
         if failed == 0: update_sync_state(supabase, "DISPUTES")
-        return {"found": found, "success": ok, "failed": failed}
+        return {"found": found, "success": ok, "failed": failed, "new": len(new_items), "new_items": new_items}
     except Exception as exc:
         write_sync_log(supabase, "DISPUTES", started, "FAILED", found, ok, failed, str(exc)); raise
+
 
 # ============================================================
 # TERMINATED
@@ -847,6 +1010,13 @@ def main():
             summaries["blanko"] = sync_blanko(page, supabase)
             summaries["terminated"] = sync_terminated(page, supabase)
             summaries["link_repair"] = repair_links(supabase)
+
+            # WA hanya untuk Blanko baru + Tersanggah baru.
+            # Kegagalan WA tidak menggagalkan sync.
+            send_sync_wa_notification(
+                summaries["blanko"].get("new_items", []),
+                summaries["disputes"].get("new_items", []),
+            )
         finally:
             if browser:
                 try:
