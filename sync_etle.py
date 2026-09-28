@@ -194,6 +194,19 @@ def update_sync_state(supabase, module, status="SUCCESS"):
     }, "module")
 
 
+def sync_baseline_exists(supabase, module):
+    """A successful prior module run is the persistent anti-backfill baseline."""
+    data = (
+        supabase.table("gsmart_sync_state")
+        .select("module,last_success_at")
+        .eq("module", module)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return bool(data and clean(data[0].get("last_success_at")))
+
+
 def write_sync_log(supabase, module, started_at, status, found=0, updated=0, failed=0, error=None):
     try:
         supabase.table("gsmart_sync_log").insert({
@@ -512,10 +525,29 @@ def get_printed_list(page):
     return rows[:SYNC_LIMIT] if SYNC_LIMIT > 0 else rows
 
 
+SHIPPING_INFO_FIELDS = ("tracking_number", "status", "status_description", "courier")
+SHIPPING_FCM_BASELINE_MODULE = "FCM_SHIPPING_BASELINE"
+
+
+def has_shipping_info(row):
+    return bool(row and any(clean(row.get(key)) for key in SHIPPING_INFO_FIELDS))
+
+
+def is_new_shipping_event(existing, shipping_row, baseline_ready, sync_mode):
+    """Classify an event without treating first baseline/full-sync rows as new."""
+    if not baseline_ready or sync_mode == "full" or not has_shipping_info(shipping_row):
+        return False
+    if not existing:
+        return True
+    return not has_shipping_info(existing[0])
+
+
 def sync_shipping(page, supabase):
     started = now_iso(); found = ok = failed = 0
     new_items = []
     try:
+        baseline_ready = sync_baseline_exists(supabase, SHIPPING_FCM_BASELINE_MODULE)
+        log(f"Shipping notification baseline: {'READY' if baseline_ready else 'BUILDING'}")
         rows = get_printed_list(page); found = len(rows)
         for i, item in enumerate(rows, 1):
             try:
@@ -570,14 +602,9 @@ def sync_shipping(page, supabase):
                 }
                 upsert(supabase, "etle_shipping", compact_row(shipping_row), "source_id")
 
-                # Hanya transisi record existing dari tanpa informasi pengiriman
-                # menjadi memiliki data/status pengiriman. Record yang belum pernah
-                # tersimpan tidak dinotifikasi agar rollout/full sync tidak membanjiri
-                # perangkat dengan data historis.
-                shipping_fields = ("tracking_number", "status", "status_description", "courier")
-                had_shipping = bool(existing and any(clean(existing[0].get(key)) for key in shipping_fields))
-                has_shipping = any(clean(shipping_row.get(key)) for key in shipping_fields)
-                if existing and not had_shipping and has_shipping:
+                # Baseline berasal dari successful state run SEBELUM run ini.
+                # Full sync tidak pernah membuat event shipping.
+                if is_new_shipping_event(existing, shipping_row, baseline_ready, SYNC_MODE):
                     new_items.append({
                         "case_id": case["case_id"],
                         "ref_number": ref,
@@ -593,7 +620,11 @@ def sync_shipping(page, supabase):
                 failed += 1; log(f"[SHIPPING {i}/{found}] GAGAL: {exc}")
         status = "SUCCESS" if failed == 0 else "PARTIAL"
         write_sync_log(supabase, "SHIPPING", started, status, found, ok, failed)
-        if failed == 0: update_sync_state(supabase, "SHIPPING")
+        if failed == 0:
+            update_sync_state(supabase, "SHIPPING")
+            # Marker khusus ini membuktikan baseline dibuat setelah fitur FCM,
+            # bukan sekadar successful SHIPPING sync dari versi lama.
+            update_sync_state(supabase, SHIPPING_FCM_BASELINE_MODULE)
         return {"found": found, "success": ok, "failed": failed, "new": len(new_items), "new_items": new_items}
     except Exception as exc:
         write_sync_log(supabase, "SHIPPING", started, "FAILED", found, ok, failed, str(exc)); raise
@@ -1006,6 +1037,21 @@ def repair_links(supabase):
     except Exception as exc:
         write_sync_log(supabase, "LINK_REPAIR", started, "FAILED", 0, linked, failed, str(exc)); raise
 
+
+def send_sync_fcm_notifications(summaries):
+    """Best-effort dispatch; an FCM failure must never fail the database sync."""
+    event_groups = (
+        ("shipping", "SHIPPING_PROCESSED"),
+        ("blanko", "BLANKO_CREATED"),
+        ("disputes", "OBJECTION_CREATED"),
+    )
+    for module, event_type in event_groups:
+        for item in summaries.get(module, {}).get("new_items", []):
+            try:
+                send_event_notification(event_type, **item)
+            except Exception as exc:
+                log(f"[FCM] {event_type} gagal, sync tetap dilanjutkan: {type(exc).__name__}")
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -1051,12 +1097,7 @@ def main():
 
             # FCM dikirim setelah record berhasil disimpan. Modul notifier selalu
             # menangkap error sehingga kegagalan Firebase tidak menggagalkan sync.
-            for item in summaries["shipping"].get("new_items", []):
-                send_event_notification("SHIPPING_PROCESSED", **item)
-            for item in summaries["blanko"].get("new_items", []):
-                send_event_notification("BLANKO_CREATED", **item)
-            for item in summaries["disputes"].get("new_items", []):
-                send_event_notification("OBJECTION_CREATED", **item)
+            send_sync_fcm_notifications(summaries)
         finally:
             if browser:
                 try:
