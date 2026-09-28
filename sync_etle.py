@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 from supabase import create_client
 
+from firebase_notifier import send_event_notification
+
 load_dotenv()
 WIB = ZoneInfo("Asia/Jakarta")
 
@@ -512,6 +514,7 @@ def get_printed_list(page):
 
 def sync_shipping(page, supabase):
     started = now_iso(); found = ok = failed = 0
+    new_items = []
     try:
         rows = get_printed_list(page); found = len(rows)
         for i, item in enumerate(rows, 1):
@@ -533,6 +536,14 @@ def sync_shipping(page, supabase):
                 printed_date = parse_date_any(item.get("printed_date") or item.get("display_date"))
                 delivered = extract_delivery_datetime(item.get("desc_terakhir"))
                 status = clean(item.get("status"))
+                existing = (
+                    supabase.table("etle_shipping")
+                    .select("tracking_number,status,status_description,courier")
+                    .eq("source_id", str(item.get("id")))
+                    .limit(1)
+                    .execute()
+                    .data
+                )
                 shipping_row = {
                     "source_id": str(item.get("id")),
                     "case_id": case["case_id"],
@@ -558,6 +569,20 @@ def sync_shipping(page, supabase):
                     "updated_at": now_iso(),
                 }
                 upsert(supabase, "etle_shipping", compact_row(shipping_row), "source_id")
+
+                # Hanya transisi record existing dari tanpa informasi pengiriman
+                # menjadi memiliki data/status pengiriman. Record yang belum pernah
+                # tersimpan tidak dinotifikasi agar rollout/full sync tidak membanjiri
+                # perangkat dengan data historis.
+                shipping_fields = ("tracking_number", "status", "status_description", "courier")
+                had_shipping = bool(existing and any(clean(existing[0].get(key)) for key in shipping_fields))
+                has_shipping = any(clean(shipping_row.get(key)) for key in shipping_fields)
+                if existing and not had_shipping and has_shipping:
+                    new_items.append({
+                        "case_id": case["case_id"],
+                        "ref_number": ref,
+                        "tnkb": shipping_row.get("tnkb") or case.get("tnkb"),
+                    })
                 if shipping_row.get("printed_at"):
                     add_history_event(supabase, case["case_id"], "LETTER_PRINTED", shipping_row["printed_at"], "Surat tilang dicetak", f"TNKB {shipping_row.get('tnkb')}", "ETLE_SHIPPING")
                 if shipping_row.get("delivered_at"):
@@ -569,7 +594,7 @@ def sync_shipping(page, supabase):
         status = "SUCCESS" if failed == 0 else "PARTIAL"
         write_sync_log(supabase, "SHIPPING", started, status, found, ok, failed)
         if failed == 0: update_sync_state(supabase, "SHIPPING")
-        return {"found": found, "success": ok, "failed": failed}
+        return {"found": found, "success": ok, "failed": failed, "new": len(new_items), "new_items": new_items}
     except Exception as exc:
         write_sync_log(supabase, "SHIPPING", started, "FAILED", found, ok, failed, str(exc)); raise
 
@@ -767,6 +792,7 @@ def sync_normalized_blanko(supabase, item, d, legacy):
         add_history_event(supabase, cid, "PAYMENT_RECEIVED", paid_at, "Pembayaran diterima", clean(item.get("status_bayar") or d.get("status")), "ETLE_BLANKO")
     if court_date:
         add_history_event(supabase, cid, "COURT_SCHEDULED", f"{court_date}T00:00:00+07:00", "Sidang terjadwal", clean(d.get("court_place")), "ETLE_BLANKO")
+    return case
 
 
 def sync_blanko(page, supabase):
@@ -796,11 +822,12 @@ def sync_blanko(page, supabase):
                     d = get_blanko_detail(page, vid)
                     legacy = build_legacy_row(item, d)
                     upsert(supabase, "etle_blanko_detail", legacy, "violation_id")
-                    sync_normalized_blanko(supabase, item, d, legacy)
+                    case = sync_normalized_blanko(supabase, item, d, legacy)
 
                     # Catat sebagai baru HANYA setelah seluruh proses record berhasil.
                     if is_new:
                         new_items.append({
+                            "case_id": case["case_id"],
                             "violation_id": str(vid),
                             "ref_number": legacy.get("ref_number"),
                             "no_blanko": legacy.get("no_blanko"),
@@ -1021,6 +1048,15 @@ def main():
                 summaries["blanko"].get("new_items", []),
                 summaries["disputes"].get("new_items", []),
             )
+
+            # FCM dikirim setelah record berhasil disimpan. Modul notifier selalu
+            # menangkap error sehingga kegagalan Firebase tidak menggagalkan sync.
+            for item in summaries["shipping"].get("new_items", []):
+                send_event_notification("SHIPPING_PROCESSED", **item)
+            for item in summaries["blanko"].get("new_items", []):
+                send_event_notification("BLANKO_CREATED", **item)
+            for item in summaries["disputes"].get("new_items", []):
+                send_event_notification("OBJECTION_CREATED", **item)
         finally:
             if browser:
                 try:

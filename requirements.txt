@@ -3,3 +3,4 @@ gunicorn==23.0.0
 playwright==1.55.0
 supabase
 python-dotenv
+firebase-admin

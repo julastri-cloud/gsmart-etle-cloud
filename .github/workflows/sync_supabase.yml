@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright supabase python-dotenv requests
+          pip install playwright supabase python-dotenv requests firebase-admin
           python -m playwright install --with-deps chromium
 
       # ======================================================
@@ -54,6 +54,11 @@ jobs:
           # --------------------------------------------------
           FONNTE_TOKEN: ${{ secrets.FONNTE_TOKEN }}
           WA_TARGET: ${{ secrets.WA_TARGET }}
+
+          # --------------------------------------------------
+          # FIREBASE CLOUD MESSAGING
+          # --------------------------------------------------
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
           # --------------------------------------------------
           # SYNC CONFIGURATION

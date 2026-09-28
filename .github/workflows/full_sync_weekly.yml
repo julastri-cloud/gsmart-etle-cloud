@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright supabase python-dotenv
+          pip install playwright supabase python-dotenv firebase-admin
           python -m playwright install --with-deps chromium
 
       - name: Run ETLE full sync
@@ -33,6 +33,7 @@ jobs:
           PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
           SYNC_MODE: 'full'
           DATE_FROM: '01-08-2026'
