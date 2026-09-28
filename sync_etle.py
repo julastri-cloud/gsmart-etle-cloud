@@ -527,6 +527,8 @@ def get_printed_list(page):
 
 SHIPPING_INFO_FIELDS = ("tracking_number", "status", "status_description", "courier")
 SHIPPING_FCM_BASELINE_MODULE = "FCM_SHIPPING_BASELINE"
+BLANKO_FCM_BASELINE_MODULE = "FCM_BLANKO_BASELINE"
+OBJECTION_FCM_BASELINE_MODULE = "FCM_OBJECTION_BASELINE"
 
 
 def has_shipping_info(row):
@@ -540,6 +542,11 @@ def is_new_shipping_event(existing, shipping_row, baseline_ready, sync_mode):
     if not existing:
         return True
     return not has_shipping_info(existing[0])
+
+
+def is_new_post_baseline_event(is_new, baseline_ready, sync_mode):
+    """Allow a new-record FCM event only after baseline and outside full sync."""
+    return bool(is_new and baseline_ready and sync_mode != "full")
 
 
 def sync_shipping(page, supabase):
@@ -829,7 +836,10 @@ def sync_normalized_blanko(supabase, item, d, legacy):
 def sync_blanko(page, supabase):
     started = now_iso(); found = ok = failed = 0
     new_items = []
+    fcm_new_items = []
     try:
+        baseline_ready = sync_baseline_exists(supabase, BLANKO_FCM_BASELINE_MODULE)
+        log(f"Blanko FCM baseline: {'READY' if baseline_ready else 'BUILDING'}")
         rows = get_blanko_list(page); found = len(rows)
         for i, item in enumerate(rows, 1):
             vid = clean(item.get("violation_id"))
@@ -857,13 +867,17 @@ def sync_blanko(page, supabase):
 
                     # Catat sebagai baru HANYA setelah seluruh proses record berhasil.
                     if is_new:
-                        new_items.append({
+                        event_item = {
                             "case_id": case["case_id"],
                             "violation_id": str(vid),
                             "ref_number": legacy.get("ref_number"),
                             "no_blanko": legacy.get("no_blanko"),
                             "tnkb": legacy.get("plat_number"),
-                        })
+                        }
+                        # new_items tetap dipakai WA dengan perilaku existing.
+                        new_items.append(event_item)
+                        if is_new_post_baseline_event(is_new, baseline_ready, SYNC_MODE):
+                            fcm_new_items.append(event_item)
 
                     ok += 1; last = None
                     log(f"[BLANKO {i}/{found}] {vid} -> OK" + (" [BARU]" if is_new else ""))
@@ -879,8 +893,14 @@ def sync_blanko(page, supabase):
 
         status = "SUCCESS" if failed == 0 else "PARTIAL"
         write_sync_log(supabase, "BLANKO", started, status, found, ok, failed)
-        if failed == 0: update_sync_state(supabase, "BLANKO")
-        return {"found": found, "success": ok, "failed": failed, "new": len(new_items), "new_items": new_items}
+        if failed == 0:
+            update_sync_state(supabase, "BLANKO")
+            update_sync_state(supabase, BLANKO_FCM_BASELINE_MODULE)
+        return {
+            "found": found, "success": ok, "failed": failed,
+            "new": len(new_items), "new_items": new_items,
+            "fcm_new_items": fcm_new_items,
+        }
     except Exception as exc:
         write_sync_log(supabase, "BLANKO", started, "FAILED", found, ok, failed, str(exc)); raise
 
@@ -899,7 +919,10 @@ def get_disputes(page):
 def sync_disputes(page, supabase):
     started = now_iso(); found = ok = failed = 0
     new_items = []
+    fcm_new_items = []
     try:
+        baseline_ready = sync_baseline_exists(supabase, OBJECTION_FCM_BASELINE_MODULE)
+        log(f"Objection FCM baseline: {'READY' if baseline_ready else 'BUILDING'}")
         rows = get_disputes(page); found = len(rows)
         for i, item in enumerate(rows, 1):
             try:
@@ -943,12 +966,16 @@ def sync_disputes(page, supabase):
 
                 # Catat sebagai baru HANYA setelah upsert berhasil.
                 if is_new:
-                    new_items.append({
+                    event_item = {
                         "case_id": case["case_id"],
                         "violation_id": str(vid),
                         "ref_number": clean(item.get("ref_number")) or case.get("ref_number"),
                         "tnkb": clean(item.get("plat_number")) or case.get("tnkb"),
-                    })
+                    }
+                    # new_items tetap dipakai WA dengan perilaku existing.
+                    new_items.append(event_item)
+                    if is_new_post_baseline_event(is_new, baseline_ready, SYNC_MODE):
+                        fcm_new_items.append(event_item)
 
                 ok += 1
                 log(f"[TERSANGGAH {i}/{found}] {vid} -> OK" + (" [BARU]" if is_new else ""))
@@ -957,8 +984,14 @@ def sync_disputes(page, supabase):
 
         status = "SUCCESS" if failed == 0 else "PARTIAL"
         write_sync_log(supabase, "DISPUTES", started, status, found, ok, failed)
-        if failed == 0: update_sync_state(supabase, "DISPUTES")
-        return {"found": found, "success": ok, "failed": failed, "new": len(new_items), "new_items": new_items}
+        if failed == 0:
+            update_sync_state(supabase, "DISPUTES")
+            update_sync_state(supabase, OBJECTION_FCM_BASELINE_MODULE)
+        return {
+            "found": found, "success": ok, "failed": failed,
+            "new": len(new_items), "new_items": new_items,
+            "fcm_new_items": fcm_new_items,
+        }
     except Exception as exc:
         write_sync_log(supabase, "DISPUTES", started, "FAILED", found, ok, failed, str(exc)); raise
 
@@ -1041,12 +1074,12 @@ def repair_links(supabase):
 def send_sync_fcm_notifications(summaries):
     """Best-effort dispatch; an FCM failure must never fail the database sync."""
     event_groups = (
-        ("shipping", "SHIPPING_PROCESSED"),
-        ("blanko", "BLANKO_CREATED"),
-        ("disputes", "OBJECTION_CREATED"),
+        ("shipping", "SHIPPING_PROCESSED", "new_items"),
+        ("blanko", "BLANKO_CREATED", "fcm_new_items"),
+        ("disputes", "OBJECTION_CREATED", "fcm_new_items"),
     )
-    for module, event_type in event_groups:
-        for item in summaries.get(module, {}).get("new_items", []):
+    for module, event_type, item_key in event_groups:
+        for item in summaries.get(module, {}).get(item_key, []):
             try:
                 send_event_notification(event_type, **item)
             except Exception as exc:
