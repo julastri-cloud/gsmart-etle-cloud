@@ -529,10 +529,22 @@ SHIPPING_INFO_FIELDS = ("tracking_number", "status", "status_description", "cour
 SHIPPING_FCM_BASELINE_MODULE = "FCM_SHIPPING_BASELINE"
 BLANKO_FCM_BASELINE_MODULE = "FCM_BLANKO_BASELINE"
 OBJECTION_FCM_BASELINE_MODULE = "FCM_OBJECTION_BASELINE"
+SHIPPING_STATUS_EVENTS = {
+    "tercetak": "SHIPPING_PRINTED",
+    "dalam proses pengiriman": "SHIPPING_IN_TRANSIT",
+    "terkirim": "SHIPPING_DELIVERED",
+    "gagal kirim": "SHIPPING_FAILED",
+    "dikembalikan": "SHIPPING_RETURNED",
+}
 
 
 def has_shipping_info(row):
     return bool(row and any(clean(row.get(key)) for key in SHIPPING_INFO_FIELDS))
+
+
+def normalize_shipping_status(value):
+    value = clean(value)
+    return " ".join(str(value).split()).casefold() if value is not None else ""
 
 
 def is_new_shipping_event(existing, shipping_row, baseline_ready, sync_mode):
@@ -544,6 +556,26 @@ def is_new_shipping_event(existing, shipping_row, baseline_ready, sync_mode):
     return not has_shipping_info(existing[0])
 
 
+def select_shipping_notification(existing, shipping_row, baseline_ready, sync_mode):
+    """Choose at most one lifecycle event, with SHIPPING_PROCESSED as fallback."""
+    if not baseline_ready or sync_mode == "full":
+        return None
+
+    new_status = normalize_shipping_status(shipping_row.get("status"))
+    old_status = normalize_shipping_status(existing[0].get("status")) if existing else ""
+    lifecycle_event = SHIPPING_STATUS_EVENTS.get(new_status)
+
+    # A known milestone has priority over the generic processed event.
+    if lifecycle_event:
+        if existing and old_status == new_status:
+            return None
+        return lifecycle_event
+
+    if is_new_shipping_event(existing, shipping_row, baseline_ready, sync_mode):
+        return "SHIPPING_PROCESSED"
+    return None
+
+
 def is_new_post_baseline_event(is_new, baseline_ready, sync_mode):
     """Allow a new-record FCM event only after baseline and outside full sync."""
     return bool(is_new and baseline_ready and sync_mode != "full")
@@ -552,6 +584,7 @@ def is_new_post_baseline_event(is_new, baseline_ready, sync_mode):
 def sync_shipping(page, supabase):
     started = now_iso(); found = ok = failed = 0
     new_items = []
+    notified_source_ids = set()
     try:
         baseline_ready = sync_baseline_exists(supabase, SHIPPING_FCM_BASELINE_MODULE)
         log(f"Shipping notification baseline: {'READY' if baseline_ready else 'BUILDING'}")
@@ -609,14 +642,19 @@ def sync_shipping(page, supabase):
                 }
                 upsert(supabase, "etle_shipping", compact_row(shipping_row), "source_id")
 
-                # Baseline berasal dari successful state run SEBELUM run ini.
-                # Full sync tidak pernah membuat event shipping.
-                if is_new_shipping_event(existing, shipping_row, baseline_ready, SYNC_MODE):
+                # Pilih maksimal satu event per source_id. Lifecycle spesifik
+                # mengalahkan SHIPPING_PROCESSED generik.
+                notification_event = select_shipping_notification(
+                    existing, shipping_row, baseline_ready, SYNC_MODE
+                )
+                if notification_event and shipping_row["source_id"] not in notified_source_ids:
                     new_items.append({
+                        "event_type": notification_event,
                         "case_id": case["case_id"],
                         "ref_number": ref,
                         "tnkb": shipping_row.get("tnkb") or case.get("tnkb"),
                     })
+                    notified_source_ids.add(shipping_row["source_id"])
                 if shipping_row.get("printed_at"):
                     add_history_event(supabase, case["case_id"], "LETTER_PRINTED", shipping_row["printed_at"], "Surat tilang dicetak", f"TNKB {shipping_row.get('tnkb')}", "ETLE_SHIPPING")
                 if shipping_row.get("delivered_at"):
@@ -1073,8 +1111,15 @@ def repair_links(supabase):
 
 def send_sync_fcm_notifications(summaries):
     """Best-effort dispatch; an FCM failure must never fail the database sync."""
+    for item in summaries.get("shipping", {}).get("new_items", []):
+        event_type = item.get("event_type", "SHIPPING_PROCESSED")
+        payload = {key: value for key, value in item.items() if key != "event_type"}
+        try:
+            send_event_notification(event_type, **payload)
+        except Exception as exc:
+            log(f"[FCM] {event_type} gagal, sync tetap dilanjutkan: {type(exc).__name__}")
+
     event_groups = (
-        ("shipping", "SHIPPING_PROCESSED", "new_items"),
         ("blanko", "BLANKO_CREATED", "fcm_new_items"),
         ("disputes", "OBJECTION_CREATED", "fcm_new_items"),
     )

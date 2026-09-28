@@ -65,6 +65,21 @@ def send_event_notification(event_type, case_id, ref_number, tnkb, no_blanko=Non
     if event_type == "SHIPPING_PROCESSED":
         title = "📮 Surat ETLE Diproses"
         body = f"{tnkb_text} • Surat mulai diproses untuk pengiriman"
+    elif event_type == "SHIPPING_PRINTED":
+        title = "🖨️ Surat ETLE Tercetak"
+        body = f"{tnkb_text} • Surat pelanggaran telah dicetak"
+    elif event_type == "SHIPPING_IN_TRANSIT":
+        title = "🚚 Surat Dalam Proses Pengiriman"
+        body = f"{tnkb_text} • Surat sedang diproses oleh JNE"
+    elif event_type == "SHIPPING_DELIVERED":
+        title = "✅ Surat Berhasil Terkirim"
+        body = f"{tnkb_text} • Surat telah diterima di tujuan"
+    elif event_type == "SHIPPING_FAILED":
+        title = "⚠️ Pengiriman Surat Gagal"
+        body = f"{tnkb_text} • Pengiriman surat mengalami kendala"
+    elif event_type == "SHIPPING_RETURNED":
+        title = "↩️ Surat Dikembalikan"
+        body = f"{tnkb_text} • Surat dikembalikan oleh jasa pengiriman"
     elif event_type == "BLANKO_CREATED":
         title = "🧾 Blanko Tilang Terbit"
         blanko_text = str(no_blanko or "-")
