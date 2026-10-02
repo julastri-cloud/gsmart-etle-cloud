@@ -17,6 +17,9 @@ DATE_FROM = os.getenv("DATE_FROM", "01-09-2026").strip()
 DATE_TO = os.getenv("DATE_TO", "30-09-2026").strip()
 HEADLESS = os.getenv("HEADLESS", "true").strip().lower() == "true"
 DETAIL_URL = os.getenv("DETAIL_URL", "").strip()
+DETAIL_NO = os.getenv("DETAIL_NO", "").strip()
+DETAIL_TIME = os.getenv("DETAIL_TIME", "").strip()
+DETAIL_TYPE = os.getenv("DETAIL_TYPE", "").strip()
 PAGE_SIZE = 100
 
 PRINTED_COLUMNS = [
@@ -200,6 +203,13 @@ def main():
             log("Login ETLE berhasil.")
 
             detail_url = DETAIL_URL
+            if not detail_url and DETAIL_NO and DETAIL_TIME and DETAIL_TYPE:
+                detail_url = urljoin(BASE, "admin-etle/printed_detail.php?") + urlencode({
+                    "id": TARGET_TNKB,
+                    "no": DETAIL_NO,
+                    "time": DETAIL_TIME,
+                    "type": DETAIL_TYPE,
+                })
             item = None
 
             if detail_url:
