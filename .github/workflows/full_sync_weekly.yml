@@ -43,6 +43,7 @@ jobs:
           REQUEST_DELAY: '0.5'
           MAX_RETRY: '3'
           PRINTED_PAGE_SIZE: '100'
+          SYNC_SHIPPING_DETAILS: 'true'
 
         run: |
           python sync_etle.py
