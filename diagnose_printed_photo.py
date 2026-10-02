@@ -117,69 +117,106 @@ def extract_detail_href(action_html):
     return None
 
 def inspect_detail(page, detail_url):
+    image_responses = []
+
+    def on_response(response):
+        try:
+            ctype = (response.headers.get("content-type") or "").lower()
+            if ctype.startswith("image/") or re.search(r"\.(jpg|jpeg|png|webp|gif)(\?|$)", response.url, re.I):
+                image_responses.append({
+                    "url": response.url,
+                    "status": response.status,
+                    "content_type": ctype,
+                })
+        except Exception:
+            pass
+
+    page.on("response", on_response)
+
     page.goto(detail_url, wait_until="domcontentloaded", timeout=60000)
     try:
         page.wait_for_load_state("networkidle", timeout=30000)
     except Exception:
         pass
-    page.wait_for_timeout(1200)
+    page.wait_for_timeout(2500)
+
+    page.screenshot(path="printed_detail_diagnostic.png", full_page=True)
+    html = page.content()
+    with open("printed_detail_diagnostic.html", "w", encoding="utf-8") as f:
+        f.write(html)
 
     images = page.evaluate("""() => Array.from(document.images).map((img, i) => ({
       index: i,
       src: img.currentSrc || img.src || "",
+      dataSrc: img.getAttribute("data-src") || "",
+      srcset: img.srcset || "",
       alt: img.alt || "",
       width: img.naturalWidth || img.width || 0,
       height: img.naturalHeight || img.height || 0,
       className: img.className || ""
     }))""")
 
-    bg_urls = page.evaluate("""() => {
+    backgrounds = page.evaluate("""() => {
       const out = [];
       for (const el of Array.from(document.querySelectorAll('*'))) {
-        const bg = getComputedStyle(el).backgroundImage;
-        const m = bg && bg.match(/url\\(["']?(.*?)["']?\\)/);
-        if (m && m[1]) out.push(m[1]);
+        const bg = getComputedStyle(el).backgroundImage || "";
+        if (bg && bg !== "none") {
+          out.push({
+            tag: el.tagName,
+            id: el.id || "",
+            className: el.className || "",
+            backgroundImage: bg
+          });
+        }
       }
-      return [...new Set(out)];
+      return out;
     }""")
 
-    candidates = []
-    seen = set()
-    for x in images:
-        src = x.get("src") or ""
-        if not src or src in seen:
-            continue
-        seen.add(src)
-        if x.get("width", 0) >= 250 or x.get("height", 0) >= 180:
-            candidates.append(x)
-    for src in bg_urls:
-        if src and src not in seen:
-            seen.add(src)
-            candidates.append({"index": None, "src": src, "alt": "background-image", "width": 0, "height": 0, "className": ""})
+    frames = page.evaluate("""() => Array.from(document.querySelectorAll('iframe')).map((x,i)=>({
+      index:i, src:x.src || x.getAttribute('src') || "", title:x.title || ""
+    }))""")
 
-    checks = []
-    for c in candidates[:10]:
-        src = c["src"]
-        check = page.evaluate("""async (url) => {
-          try {
-            const r = await fetch(url, {credentials:"include", cache:"no-store"});
-            return {
-              ok:r.ok, status:r.status,
-              contentType:r.headers.get("content-type"),
-              contentLength:r.headers.get("content-length")
-            };
-          } catch(e) {
-            return {ok:false,status:0,error:String(e)};
-          }
-        }""", src)
-        checks.append({**c, **check})
+    canvases = page.evaluate("""() => Array.from(document.querySelectorAll('canvas')).map((x,i)=>({
+      index:i, width:x.width, height:x.height, className:x.className || "", id:x.id || ""
+    }))""")
+
+    objects = page.evaluate("""() => Array.from(document.querySelectorAll('object,embed')).map((x,i)=>({
+      index:i, tag:x.tagName, src:x.src || x.data || x.getAttribute('src') || x.getAttribute('data') || ""
+    }))""")
+
+    html_refs = sorted(set(re.findall(
+        r'''https?://[^"'\s<>]+|(?:/|\.\./|\./)[^"'\s<>]+\.(?:jpg|jpeg|png|webp|gif)(?:\?[^"'\s<>]*)?''',
+        html,
+        flags=re.I
+    )))[:100]
+
+    keyword_snippets = []
+    lower_html = html.lower()
+    for keyword in ("foto", "photo", "image", "img", "pelanggaran"):
+        pos = lower_html.find(keyword)
+        if pos >= 0:
+            keyword_snippets.append({
+                "keyword": keyword,
+                "snippet": re.sub(r"\s+", " ", html[max(0,pos-250):pos+750])
+            })
 
     return {
         "detail_url": page.url,
         "page_title": page.title(),
         "all_image_count": len(images),
-        "candidate_count": len(candidates),
-        "candidates": checks,
+        "images": images,
+        "background_count": len(backgrounds),
+        "backgrounds": backgrounds[:50],
+        "iframe_count": len(frames),
+        "iframes": frames,
+        "canvas_count": len(canvases),
+        "canvases": canvases,
+        "object_embed_count": len(objects),
+        "objects": objects,
+        "network_image_count": len(image_responses),
+        "network_images": image_responses[:100],
+        "html_image_refs": html_refs,
+        "keyword_snippets": keyword_snippets,
     }
 
 def main():
@@ -248,9 +285,14 @@ def main():
             browser.close()
 
             log(f"Detail URL: {report['detail']['detail_url']}")
-            log(f"Kandidat foto besar: {report['detail']['candidate_count']}")
-            for i, c in enumerate(report["detail"]["candidates"], 1):
-                log(f"[PHOTO {i}] HTTP {c.get('status')} {c.get('contentType')} {c.get('width')}x{c.get('height')} {c.get('src')}")
+            log(f"DOM images: {report['detail']['all_image_count']}")
+            log(f"Network image responses: {report['detail']['network_image_count']}")
+            log(f"Background images: {report['detail']['background_count']}")
+            log(f"Iframes: {report['detail']['iframe_count']} | Canvas: {report['detail']['canvas_count']} | Object/Embed: {report['detail']['object_embed_count']}")
+            for i, c in enumerate(report["detail"]["network_images"], 1):
+                log(f"[NET IMG {i}] HTTP {c.get('status')} {c.get('content_type')} {c.get('url')}")
+            for i, c in enumerate(report["detail"]["images"], 1):
+                log(f"[DOM IMG {i}] {c.get('width')}x{c.get('height')} src={c.get('src')} data-src={c.get('dataSrc')}")
     finally:
         with open("photo_diagnostic.json", "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
