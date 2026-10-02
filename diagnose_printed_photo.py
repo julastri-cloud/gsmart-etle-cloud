@@ -1,0 +1,235 @@
+import os
+import json
+import re
+import time
+from html import unescape
+from urllib.parse import urlencode, urljoin
+from playwright.sync_api import sync_playwright
+
+BASE = "https://etilang-djpd.kemenhub.go.id:9000/"
+URL_LOGIN = urljoin(BASE, "main/")
+URL_PRINTED = urljoin(BASE, "etle/admin-etle/penindakan_printed_list.php")
+
+EMAIL_ETLE = os.getenv("EMAIL_ETLE", "").strip()
+PASSWORD_ETLE = os.getenv("PASSWORD_ETLE", "").strip()
+TARGET_TNKB = re.sub(r"\s+", "", os.getenv("TARGET_TNKB", "AE8768SK").upper())
+DATE_FROM = os.getenv("DATE_FROM", "01-09-2026").strip()
+DATE_TO = os.getenv("DATE_TO", "30-09-2026").strip()
+HEADLESS = os.getenv("HEADLESS", "true").strip().lower() == "true"
+PAGE_SIZE = 100
+
+PRINTED_COLUMNS = [
+    "inserted_date", "display_date", "ref_number", "plat_number", "alamat_regiden",
+    "wilayah_satuan", "wilayah_induk", "no_resi", "pelanggaran", "validasi_date",
+    "status", "aksi"
+]
+
+def log(msg):
+    print(msg, flush=True)
+
+def norm_plate(v):
+    return re.sub(r"\s+", "", str(v or "").upper())
+
+def login(page):
+    page.goto(URL_LOGIN, wait_until="domcontentloaded", timeout=60000)
+    page.locator('input[placeholder="Email"]').wait_for(state="visible", timeout=30000)
+    page.locator('input[placeholder="Email"]').fill(EMAIL_ETLE)
+    page.locator('input[placeholder="Password"]').fill(PASSWORD_ETLE)
+    page.locator('button:has-text("Login")').click()
+    try:
+        page.wait_for_load_state("networkidle", timeout=30000)
+    except Exception:
+        pass
+    page.wait_for_timeout(1500)
+    if "/main/" in page.url:
+        raise RuntimeError("Login ETLE gagal")
+
+def build_url(start, draw):
+    p = {
+        "draw": draw,
+        "order[0][column]": 0,
+        "order[0][dir]": "asc",
+        "start": start,
+        "length": PAGE_SIZE,
+        "search[value]": "",
+        "search[regex]": "false",
+        "date": f"{DATE_FROM} 00:00",
+        "date1": f"{DATE_TO} 23:59",
+        "selectAll": "no",
+        "provinsi": "",
+        "status": "Sudah_Dicetak",
+        "_": int(time.time() * 1000),
+    }
+    for i, field in enumerate(PRINTED_COLUMNS):
+        p[f"columns[{i}][data]"] = field
+        p[f"columns[{i}][name]"] = ""
+        p[f"columns[{i}][searchable]"] = "true"
+        p[f"columns[{i}][orderable]"] = "true"
+        p[f"columns[{i}][search][value]"] = ""
+        p[f"columns[{i}][search][regex]"] = "false"
+    return URL_PRINTED + "?" + urlencode(p)
+
+def browser_json(page, url):
+    result = page.evaluate("""async (url) => {
+      const r = await fetch(url, {
+        method: "GET", credentials: "include", cache: "no-store",
+        headers: {"Accept":"application/json, text/javascript, */*; q=0.01",
+                  "X-Requested-With":"XMLHttpRequest"}
+      });
+      return {status:r.status, body:await r.text()};
+    }""", url)
+    if result["status"] != 200:
+        raise RuntimeError(f"HTTP {result['status']}")
+    return json.loads(result["body"])
+
+def find_target(page):
+    start = 0
+    draw = 1
+    while True:
+        data = browser_json(page, build_url(start, draw))
+        batch = data.get("data", [])
+        total = int(data.get("recordsFiltered", data.get("recordsTotal", len(batch))) or 0)
+        log(f"Scan shipping: {start + len(batch)}/{total}")
+        for item in batch:
+            if norm_plate(item.get("plat_number")) == TARGET_TNKB:
+                return item
+        if not batch or start + len(batch) >= total:
+            return None
+        start += len(batch)
+        draw += 1
+
+def extract_detail_href(action_html):
+    s = unescape(str(action_html or ""))
+    patterns = [
+        r'href=["\']([^"\']*printed_detail\.php[^"\']*)["\']',
+        r'(https?://[^"\'\s<>]*printed_detail\.php[^"\'\s<>]*)',
+        r'(["\'])([^"\']*printed_detail\.php[^"\']*)\1',
+    ]
+    for p in patterns:
+        m = re.search(p, s, flags=re.I)
+        if m:
+            href = m.group(2) if len(m.groups()) >= 2 and m.group(2) else m.group(1)
+            return urljoin(BASE, href)
+    return None
+
+def inspect_detail(page, detail_url):
+    page.goto(detail_url, wait_until="domcontentloaded", timeout=60000)
+    try:
+        page.wait_for_load_state("networkidle", timeout=30000)
+    except Exception:
+        pass
+    page.wait_for_timeout(1200)
+
+    images = page.evaluate("""() => Array.from(document.images).map((img, i) => ({
+      index: i,
+      src: img.currentSrc || img.src || "",
+      alt: img.alt || "",
+      width: img.naturalWidth || img.width || 0,
+      height: img.naturalHeight || img.height || 0,
+      className: img.className || ""
+    }))""")
+
+    bg_urls = page.evaluate("""() => {
+      const out = [];
+      for (const el of Array.from(document.querySelectorAll('*'))) {
+        const bg = getComputedStyle(el).backgroundImage;
+        const m = bg && bg.match(/url\(["']?(.*?)["']?\)/);
+        if (m && m[1]) out.push(m[1]);
+      }
+      return [...new Set(out)];
+    }""")
+
+    candidates = []
+    seen = set()
+    for x in images:
+        src = x.get("src") or ""
+        if not src or src in seen:
+            continue
+        seen.add(src)
+        if x.get("width", 0) >= 250 or x.get("height", 0) >= 180:
+            candidates.append(x)
+    for src in bg_urls:
+        if src and src not in seen:
+            seen.add(src)
+            candidates.append({"index": None, "src": src, "alt": "background-image", "width": 0, "height": 0, "className": ""})
+
+    checks = []
+    for c in candidates[:10]:
+        src = c["src"]
+        check = page.evaluate("""async (url) => {
+          try {
+            const r = await fetch(url, {credentials:"include", cache:"no-store"});
+            return {
+              ok:r.ok, status:r.status,
+              contentType:r.headers.get("content-type"),
+              contentLength:r.headers.get("content-length")
+            };
+          } catch(e) {
+            return {ok:false,status:0,error:String(e)};
+          }
+        }""", src)
+        checks.append({**c, **check})
+
+    return {
+        "detail_url": page.url,
+        "page_title": page.title(),
+        "all_image_count": len(images),
+        "candidate_count": len(candidates),
+        "candidates": checks,
+    }
+
+def main():
+    if not EMAIL_ETLE or not PASSWORD_ETLE:
+        raise RuntimeError("EMAIL_ETLE/PASSWORD_ETLE belum tersedia")
+
+    report = {
+        "mode": "READ_ONLY_DIAGNOSTIC",
+        "target_tnkb": TARGET_TNKB,
+        "date_from": DATE_FROM,
+        "date_to": DATE_TO,
+        "supabase_write": False,
+    }
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=HEADLESS, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = browser.new_context(viewport={"width": 1440, "height": 1000})
+            page = context.new_page()
+            login(page)
+            log("Login ETLE berhasil.")
+
+            item = find_target(page)
+            if not item:
+                report["found"] = False
+                raise RuntimeError(f"TNKB {TARGET_TNKB} tidak ditemukan pada rentang tanggal")
+
+            report["found"] = True
+            report["shipping"] = {
+                "plat_number": item.get("plat_number"),
+                "ref_number": item.get("ref_number"),
+                "inserted_date": item.get("inserted_date"),
+                "display_date": item.get("display_date"),
+                "pelanggaran": item.get("pelanggaran") or item.get("report_type"),
+                "source_id": item.get("id"),
+                "has_action": bool(item.get("aksi")),
+            }
+
+            detail_url = extract_detail_href(item.get("aksi"))
+            report["detail_url_from_action"] = detail_url
+            if not detail_url:
+                report["action_preview"] = str(item.get("aksi") or "")[:1000]
+                raise RuntimeError("URL printed_detail.php tidak ditemukan di field aksi")
+
+            report["detail"] = inspect_detail(page, detail_url)
+            browser.close()
+
+            log(f"Detail URL: {report['detail']['detail_url']}")
+            log(f"Kandidat foto besar: {report['detail']['candidate_count']}")
+            for i, c in enumerate(report["detail"]["candidates"], 1):
+                log(f"[PHOTO {i}] HTTP {c.get('status')} {c.get('contentType')} {c.get('width')}x{c.get('height')} {c.get('src')}")
+    finally:
+        with open("photo_diagnostic.json", "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+
+if __name__ == "__main__":
+    main()
