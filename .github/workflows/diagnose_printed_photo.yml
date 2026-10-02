@@ -66,6 +66,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: photo-diagnostic-${{ inputs.target_tnkb }}
-          path: photo_diagnostic.json
+          path: |
+            photo_diagnostic.json
+            printed_detail_diagnostic.png
+            printed_detail_diagnostic.html
           if-no-files-found: warn
           retention-days: 3
