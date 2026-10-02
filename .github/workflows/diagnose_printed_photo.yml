@@ -1,0 +1,56 @@
+name: Diagnose ETLE Printed Photo
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_tnkb:
+        description: "TNKB yang diuji, tanpa spasi juga boleh"
+        required: true
+        default: "AE8768SK"
+      date_from:
+        description: "Tanggal awal DD-MM-YYYY"
+        required: true
+        default: "01-09-2026"
+      date_to:
+        description: "Tanggal akhir DD-MM-YYYY"
+        required: true
+        default: "30-09-2026"
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run read-only diagnostic
+        env:
+          EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
+          PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+          TARGET_TNKB: ${{ inputs.target_tnkb }}
+          DATE_FROM: ${{ inputs.date_from }}
+          DATE_TO: ${{ inputs.date_to }}
+          HEADLESS: "true"
+        run: python diagnose_printed_photo.py
+
+      - name: Upload diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: photo-diagnostic-${{ inputs.target_tnkb }}
+          path: photo_diagnostic.json
+          if-no-files-found: warn
+          retention-days: 3
