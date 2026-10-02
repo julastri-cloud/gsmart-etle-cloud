@@ -4,7 +4,8 @@ import time
 import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
+from html import unescape
 
 import requests
 
@@ -46,6 +47,7 @@ HEADLESS = os.getenv("HEADLESS", "true").strip().lower() == "true"
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.35"))
 MAX_RETRY = int(os.getenv("MAX_RETRY", "3"))
 PRINTED_PAGE_SIZE = int(os.getenv("PRINTED_PAGE_SIZE", "100"))
+SYNC_SHIPPING_DETAILS = os.getenv("SYNC_SHIPPING_DETAILS", "false").strip().lower() == "true"
 
 if SYNC_MODE not in {"incremental", "full", "test"}:
     raise RuntimeError("SYNC_MODE harus incremental, full, atau test")
@@ -581,10 +583,149 @@ def is_new_post_baseline_event(is_new, baseline_ready, sync_mode):
     return bool(is_new and baseline_ready and sync_mode != "full")
 
 
+def normalize_plate(value):
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def parse_printed_detail_url(item):
+    action = unescape(str(item.get("aksi") or ""))
+    patterns = (
+        r'https?://[^"\'\s<>]*printed_detail\.php\?[^"\'\s<>]+',
+        r'/?admin-etle/printed_detail\.php\?[^"\'\s<>]+',
+        r'printed_detail\.php\?[^"\'\s<>]+',
+    )
+    for pattern in patterns:
+        m = re.search(pattern, action, flags=re.I)
+        if m:
+            href = m.group(0)
+            if href.startswith("http"):
+                return href
+            return urljoin("https://etilang-djpd.kemenhub.go.id:9000/admin-etle/", href)
+
+    source_id = clean(item.get("id"))
+    tnkb = normalize_plate(item.get("plat_number"))
+    violation_type = clean(item.get("pelanggaran") or item.get("report_type"))
+    raw_time = clean(item.get("inserted_date"))
+    parsed_time = parse_datetime_any(raw_time)
+    if source_id and tnkb and violation_type and parsed_time:
+        dt = datetime.fromisoformat(parsed_time.replace("Z", "+00:00"))
+        return (
+            "https://etilang-djpd.kemenhub.go.id:9000/admin-etle/printed_detail.php?"
+            + urlencode({
+                "id": tnkb,
+                "no": source_id,
+                "time": dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "type": violation_type,
+            })
+        )
+    return None
+
+
+def printed_detail_table(page, selector):
+    rows = page.locator(selector + " tr")
+    result = {}
+    for idx in range(rows.count()):
+        cells = rows.nth(idx).locator("th,td")
+        if cells.count() >= 3:
+            key = clean(cells.nth(0).inner_text())
+            value = clean(cells.nth(2).inner_text())
+            if key:
+                result[key] = value
+    return result
+
+
+def shipping_detail_needs_enrichment(supabase, case_id):
+    photo = (
+        supabase.table("etle_photos")
+        .select("photo_id")
+        .eq("case_id", case_id)
+        .eq("photo_type", "VEHICLE")
+        .limit(1)
+        .execute()
+        .data
+    )
+    vehicle = (
+        supabase.table("etle_vehicles")
+        .select("case_id,nama_pemilik,merk,tipe,jenis_kendaraan,no_mesin,no_rangka,masa_berlaku_kir,jbi")
+        .eq("case_id", case_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    need_photo = not bool(photo)
+    if not vehicle:
+        need_vehicle = True
+    else:
+        row = vehicle[0]
+        need_vehicle = any(
+            not clean(row.get(key))
+            for key in ("nama_pemilik", "merk", "tipe", "jenis_kendaraan", "no_mesin", "no_rangka", "masa_berlaku_kir", "jbi")
+        )
+    return need_photo, need_vehicle
+
+
+def enrich_shipping_detail(page, supabase, item, case):
+    need_photo, need_vehicle = shipping_detail_needs_enrichment(supabase, case["case_id"])
+    if not need_photo and not need_vehicle:
+        return "SKIPPED"
+
+    detail_url = parse_printed_detail_url(item)
+    if not detail_url:
+        raise RuntimeError("printed_detail URL tidak ditemukan")
+
+    page.goto(detail_url, wait_until="domcontentloaded", timeout=60000)
+    try:
+        page.evaluate("window.stop()")
+    except Exception:
+        pass
+    page.wait_for_timeout(150)
+
+    if "/main/" in page.url:
+        raise RuntimeError("Session ETLE tidak aktif saat membuka printed_detail")
+
+    updated = False
+    if need_vehicle:
+        blue = printed_detail_table(page, "#informasiKendaraan")
+        vehicle_row = compact_row({
+            "case_id": case["case_id"],
+            "violation_id": case.get("violation_id"),
+            "nama_pemilik": clean(blue.get("Nama Pemilik")),
+            "alamat_pemilik": clean(blue.get("Alamat")),
+            "merk": clean(blue.get("Merk")),
+            "tipe": clean(blue.get("Type")),
+            "jenis_kendaraan": clean(blue.get("Jenis Kendaraan")),
+            "no_mesin": clean(blue.get("No Mesin")),
+            "no_rangka": clean(blue.get("No Rangka")),
+            "masa_berlaku_kir": parse_date_any(blue.get("Masa Berlaku KIR")),
+            "jbi": numeric(blue.get("JBI/JBKB")),
+            "updated_at": now_iso(),
+        })
+        if len(vehicle_row) > 3:
+            upsert(supabase, "etle_vehicles", vehicle_row, "case_id")
+            updated = True
+
+    if need_photo:
+        photo_url = clean(page.locator("#fullFrame").get_attribute("src")) if page.locator("#fullFrame").count() else None
+        if photo_url:
+            upsert(supabase, "etle_photos", {
+                "case_id": case["case_id"],
+                "violation_id": case.get("violation_id"),
+                "photo_type": "VEHICLE",
+                "photo_url": photo_url,
+                "description": "Foto kendaraan pelanggaran dari printed_detail.php",
+                "sort_order": 1,
+                "updated_at": now_iso(),
+            }, "case_id,photo_type,photo_url")
+            updated = True
+
+    return "UPDATED" if updated else "NO_DATA"
+
+
 def sync_shipping(page, supabase):
     started = now_iso(); found = ok = failed = 0
     new_items = []
     notified_source_ids = set()
+    detail_checked = detail_updated = detail_skipped = detail_failed = 0
     try:
         baseline_ready = sync_baseline_exists(supabase, SHIPPING_FCM_BASELINE_MODULE)
         log(f"Shipping notification baseline: {'READY' if baseline_ready else 'BUILDING'}")
@@ -659,6 +800,19 @@ def sync_shipping(page, supabase):
                     add_history_event(supabase, case["case_id"], "LETTER_PRINTED", shipping_row["printed_at"], "Surat tilang dicetak", f"TNKB {shipping_row.get('tnkb')}", "ETLE_SHIPPING")
                 if shipping_row.get("delivered_at"):
                     add_history_event(supabase, case["case_id"], "LETTER_DELIVERED", shipping_row["delivered_at"], "Surat diterima", shipping_row.get("status_description"), "ETLE_SHIPPING")
+
+                if SYNC_SHIPPING_DETAILS:
+                    detail_checked += 1
+                    try:
+                        detail_result = enrich_shipping_detail(page, supabase, item, case)
+                        if detail_result == "UPDATED":
+                            detail_updated += 1
+                        elif detail_result == "SKIPPED":
+                            detail_skipped += 1
+                        log(f"[SHIPPING DETAIL {i}/{found}] {ref} -> {detail_result}")
+                    except Exception as detail_exc:
+                        detail_failed += 1
+                        log(f"[SHIPPING DETAIL {i}/{found}] {ref} -> GAGAL ({type(detail_exc).__name__}: {detail_exc})")
                 ok += 1
                 log(f"[SHIPPING {i}/{found}] {ref} -> OK")
             except Exception as exc:
@@ -670,7 +824,14 @@ def sync_shipping(page, supabase):
             # Marker khusus ini membuktikan baseline dibuat setelah fitur FCM,
             # bukan sekadar successful SHIPPING sync dari versi lama.
             update_sync_state(supabase, SHIPPING_FCM_BASELINE_MODULE)
-        return {"found": found, "success": ok, "failed": failed, "new": len(new_items), "new_items": new_items}
+        return {
+            "found": found, "success": ok, "failed": failed,
+            "new": len(new_items), "new_items": new_items,
+            "detail_checked": detail_checked,
+            "detail_updated": detail_updated,
+            "detail_skipped": detail_skipped,
+            "detail_failed": detail_failed,
+        }
     except Exception as exc:
         write_sync_log(supabase, "SHIPPING", started, "FAILED", found, ok, failed, str(exc)); raise
 
