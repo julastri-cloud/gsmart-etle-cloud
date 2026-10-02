@@ -27,6 +27,21 @@ jobs:
           pip install playwright supabase python-dotenv firebase-admin
           python -m playwright install --with-deps chromium
 
+      - name: Apply shipping detail wait fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('sync_etle.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    page.goto(detail_url, wait_until="domcontentloaded", timeout=60000)\n    try:\n        page.evaluate("window.stop()")\n    except Exception:\n        pass\n    page.wait_for_timeout(150)\n'''
+          new = '''    page.goto(detail_url, wait_until="domcontentloaded", timeout=60000)\n    try:\n        page.wait_for_load_state("networkidle", timeout=30000)\n    except Exception:\n        pass\n    # printed_detail mengisi informasi kendaraan setelah DOM awal selesai.\n    # Beri waktu yang sama dengan sync_single_blue yang sudah terbukti stabil.\n    page.wait_for_timeout(1000)\n'''
+          if old not in text:
+              raise SystemExit('Target shipping detail block tidak ditemukan; patch dibatalkan agar aman.')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          print('Shipping detail wait fix applied.')
+          PY
+
       - name: Run ETLE full sync
         env:
           EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
