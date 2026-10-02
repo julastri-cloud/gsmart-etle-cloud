@@ -16,6 +16,7 @@ TARGET_TNKB = re.sub(r"\s+", "", os.getenv("TARGET_TNKB", "AE8768SK").upper())
 DATE_FROM = os.getenv("DATE_FROM", "01-09-2026").strip()
 DATE_TO = os.getenv("DATE_TO", "30-09-2026").strip()
 HEADLESS = os.getenv("HEADLESS", "true").strip().lower() == "true"
+DETAIL_URL = os.getenv("DETAIL_URL", "").strip()
 PAGE_SIZE = 100
 
 PRINTED_COLUMNS = [
@@ -133,7 +134,7 @@ def inspect_detail(page, detail_url):
       const out = [];
       for (const el of Array.from(document.querySelectorAll('*'))) {
         const bg = getComputedStyle(el).backgroundImage;
-        const m = bg && bg.match(/url\(["']?(.*?)["']?\)/);
+        const m = bg && bg.match(/url\\(["']?(.*?)["']?\\)/);
         if (m && m[1]) out.push(m[1]);
       }
       return [...new Set(out)];
@@ -198,27 +199,40 @@ def main():
             login(page)
             log("Login ETLE berhasil.")
 
-            item = find_target(page)
-            if not item:
-                report["found"] = False
-                raise RuntimeError(f"TNKB {TARGET_TNKB} tidak ditemukan pada rentang tanggal")
+            detail_url = DETAIL_URL
+            item = None
 
-            report["found"] = True
-            report["shipping"] = {
-                "plat_number": item.get("plat_number"),
-                "ref_number": item.get("ref_number"),
-                "inserted_date": item.get("inserted_date"),
-                "display_date": item.get("display_date"),
-                "pelanggaran": item.get("pelanggaran") or item.get("report_type"),
-                "source_id": item.get("id"),
-                "has_action": bool(item.get("aksi")),
-            }
+            if detail_url:
+                report["resolution_mode"] = "DIRECT_DETAIL_URL"
+                report["found"] = True
+                report["detail_url_from_input"] = detail_url
+                log("Menggunakan DETAIL_URL langsung; scan shipping dilewati.")
+            else:
+                report["resolution_mode"] = "SHIPPING_LOOKUP"
+                item = find_target(page)
+                if not item:
+                    report["found"] = False
+                    raise RuntimeError(
+                        f"TNKB {TARGET_TNKB} tidak ditemukan pada daftar shipping rentang tanggal. "
+                        "Gunakan input detail_url untuk menguji halaman printed_detail.php secara langsung."
+                    )
 
-            detail_url = extract_detail_href(item.get("aksi"))
-            report["detail_url_from_action"] = detail_url
-            if not detail_url:
-                report["action_preview"] = str(item.get("aksi") or "")[:1000]
-                raise RuntimeError("URL printed_detail.php tidak ditemukan di field aksi")
+                report["found"] = True
+                report["shipping"] = {
+                    "plat_number": item.get("plat_number"),
+                    "ref_number": item.get("ref_number"),
+                    "inserted_date": item.get("inserted_date"),
+                    "display_date": item.get("display_date"),
+                    "pelanggaran": item.get("pelanggaran") or item.get("report_type"),
+                    "source_id": item.get("id"),
+                    "has_action": bool(item.get("aksi")),
+                }
+
+                detail_url = extract_detail_href(item.get("aksi"))
+                report["detail_url_from_action"] = detail_url
+                if not detail_url:
+                    report["action_preview"] = str(item.get("aksi") or "")[:1000]
+                    raise RuntimeError("URL printed_detail.php tidak ditemukan di field aksi")
 
             report["detail"] = inspect_detail(page, detail_url)
             browser.close()
