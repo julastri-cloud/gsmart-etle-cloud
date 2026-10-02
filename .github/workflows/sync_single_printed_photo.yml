@@ -1,0 +1,71 @@
+name: Sync Single ETLE Printed Photo
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_tnkb:
+        description: "TNKB target"
+        required: true
+        default: "AE8768SK"
+      detail_no:
+        description: "Parameter no dari printed_detail.php"
+        required: true
+        default: "347586"
+      detail_time:
+        description: "Waktu pelanggaran YYYY-MM-DD HH:MM:SS"
+        required: true
+        default: "2026-09-12 14:17:23"
+      detail_type:
+        description: "Jenis pelanggaran"
+        required: true
+        default: "DOKUMEN"
+      dry_run:
+        description: "true = hanya cek, false = tulis 1 foto ke Supabase"
+        required: true
+        type: choice
+        options:
+          - "true"
+          - "false"
+        default: "true"
+
+jobs:
+  sync-one-photo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright supabase
+          python -m playwright install --with-deps chromium
+
+      - name: Run single-photo sync
+        env:
+          EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
+          PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TARGET_TNKB: ${{ inputs.target_tnkb }}
+          DETAIL_NO: ${{ inputs.detail_no }}
+          DETAIL_TIME: ${{ inputs.detail_time }}
+          DETAIL_TYPE: ${{ inputs.detail_type }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python sync_single_printed_photo.py
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: single-photo-sync-${{ inputs.target_tnkb }}
+          path: single_photo_sync_result.json
+          if-no-files-found: warn
+          retention-days: 3
