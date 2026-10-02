@@ -241,7 +241,7 @@ def main():
 
             detail_url = DETAIL_URL
             if not detail_url and DETAIL_NO and DETAIL_TIME and DETAIL_TYPE:
-                detail_url = urljoin(BASE, "admin-etle/printed_detail.php?") + urlencode({
+                detail_url = BASE.rstrip("/") + "/admin-etle/printed_detail.php?" + urlencode({
                     "id": TARGET_TNKB,
                     "no": DETAIL_NO,
                     "time": DETAIL_TIME,
