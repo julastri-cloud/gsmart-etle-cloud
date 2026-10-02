@@ -15,6 +15,18 @@ on:
         description: "Tanggal akhir DD-MM-YYYY"
         required: true
         default: "30-09-2026"
+      detail_no:
+        description: "Nomor detail dari URL printed_detail.php"
+        required: false
+        default: "347586"
+      detail_time:
+        description: "Waktu detail YYYY-MM-DD HH:MM:SS"
+        required: false
+        default: "2026-09-12 14:17:23"
+      detail_type:
+        description: "Jenis pelanggaran pada URL detail"
+        required: false
+        default: "DOKUMEN"
 
 jobs:
   diagnose:
@@ -43,6 +55,9 @@ jobs:
           TARGET_TNKB: ${{ inputs.target_tnkb }}
           DATE_FROM: ${{ inputs.date_from }}
           DATE_TO: ${{ inputs.date_to }}
+          DETAIL_NO: ${{ inputs.detail_no }}
+          DETAIL_TIME: ${{ inputs.detail_time }}
+          DETAIL_TYPE: ${{ inputs.detail_type }}
           HEADLESS: "true"
         run: python diagnose_printed_photo.py
 
