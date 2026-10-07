@@ -50,7 +50,7 @@ jobs:
           PRINTED_PAGE_SIZE: "100"
           CONFIRMATION_MISSING_THRESHOLD: "2"
 
-          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
 
         run: |
           python daya_angkut_sosialisasi.py
