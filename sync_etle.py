@@ -845,10 +845,14 @@ def enrich_shipping_detail(page, supabase, item, case):
 
     page.goto(detail_url, wait_until="domcontentloaded", timeout=60000)
     try:
-        page.evaluate("window.stop()")
+        page.wait_for_load_state("networkidle", timeout=30000)
     except Exception:
         pass
-    page.wait_for_timeout(150)
+
+    # printed_detail mengisi tabel detail setelah DOM awal selesai.
+    # Tunggu sedikit lebih lama agar #detailPelanggaran dan #informasiKendaraan
+    # benar-benar tersedia sebelum dibaca.
+    page.wait_for_timeout(1000)
 
     if "/main/" in page.url:
         raise RuntimeError("Session ETLE tidak aktif saat membuka printed_detail")
