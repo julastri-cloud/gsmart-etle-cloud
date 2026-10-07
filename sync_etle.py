@@ -763,7 +763,7 @@ def printed_detail_table(page, selector):
     return result
 
 
-def shipping_detail_needs_enrichment(supabase, case_id):
+def shipping_detail_needs_enrichment(supabase, case_id, require_weight=False):
     photo = (
         supabase.table("etle_photos")
         .select("photo_id")
@@ -775,7 +775,7 @@ def shipping_detail_needs_enrichment(supabase, case_id):
     )
     vehicle = (
         supabase.table("etle_vehicles")
-        .select("case_id,nama_pemilik,merk,tipe,jenis_kendaraan,no_mesin,no_rangka,masa_berlaku_kir,jbi")
+        .select("case_id,nama_pemilik,merk,tipe,jenis_kendaraan,no_mesin,no_rangka,masa_berlaku_kir,jbi,berat_timbang,berat_lebih")
         .eq("case_id", case_id)
         .limit(1)
         .execute()
@@ -786,15 +786,36 @@ def shipping_detail_needs_enrichment(supabase, case_id):
         need_vehicle = True
     else:
         row = vehicle[0]
-        need_vehicle = any(
-            not clean(row.get(key))
-            for key in ("nama_pemilik", "merk", "tipe", "jenis_kendaraan", "no_mesin", "no_rangka", "masa_berlaku_kir", "jbi")
-        )
+        required = ["nama_pemilik", "merk", "tipe", "jenis_kendaraan", "no_mesin", "no_rangka", "masa_berlaku_kir", "jbi"]
+        if require_weight:
+            required += ["berat_timbang", "berat_lebih"]
+        need_vehicle = any(not clean(row.get(key)) for key in required)
     return need_photo, need_vehicle
 
 
+def parse_weight_value(value):
+    value = clean(value)
+    if not value:
+        return None
+    match = re.search(r"-?\d[\d.,]*", str(value))
+    if not match:
+        return None
+    raw = match.group(0)
+    # Nilai dari printed_detail saat ini berupa integer tanpa pemisah ribuan.
+    # Tetap toleran terhadap format 11.616 / 11,616 yang mungkin muncul di UI.
+    if raw.count(".") == 1 and len(raw.rsplit(".", 1)[1]) == 3:
+        raw = raw.replace(".", "")
+    if raw.count(",") == 1 and len(raw.rsplit(",", 1)[1]) == 3:
+        raw = raw.replace(",", "")
+    return numeric(raw)
+
+
 def enrich_shipping_detail(page, supabase, item, case):
-    need_photo, need_vehicle = shipping_detail_needs_enrichment(supabase, case["case_id"])
+    jenis = clean(item.get("pelanggaran") or item.get("report_type")) or ""
+    require_weight = "DAYA ANGKUT" in jenis.upper()
+    need_photo, need_vehicle = shipping_detail_needs_enrichment(
+        supabase, case["case_id"], require_weight=require_weight
+    )
     if not need_photo and not need_vehicle:
         return "SKIPPED"
 
@@ -815,6 +836,7 @@ def enrich_shipping_detail(page, supabase, item, case):
     updated = False
     if need_vehicle:
         blue = printed_detail_table(page, "#informasiKendaraan")
+        pelanggaran = printed_detail_table(page, "#detailPelanggaran") if require_weight else {}
         vehicle_row = compact_row({
             "case_id": case["case_id"],
             "violation_id": case.get("violation_id"),
@@ -826,7 +848,9 @@ def enrich_shipping_detail(page, supabase, item, case):
             "no_mesin": clean(blue.get("No Mesin")),
             "no_rangka": clean(blue.get("No Rangka")),
             "masa_berlaku_kir": parse_date_any(blue.get("Masa Berlaku KIR")),
-            "jbi": numeric(blue.get("JBI/JBKB")),
+            "jbi": parse_weight_value(pelanggaran.get("JBI/JBKB")) if require_weight else numeric(blue.get("JBI/JBKB")),
+            "berat_timbang": parse_weight_value(pelanggaran.get("Berat Timbang")) if require_weight else None,
+            "berat_lebih": parse_weight_value(pelanggaran.get("Berat Lebih")) if require_weight else None,
             "updated_at": now_iso(),
         })
         if len(vehicle_row) > 3:
