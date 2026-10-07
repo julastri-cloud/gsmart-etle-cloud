@@ -46,6 +46,7 @@ TEST_LIMIT = int(os.getenv("TEST_LIMIT", "5"))
 HEADLESS = os.getenv("HEADLESS", "true").strip().lower() == "true"
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.35"))
 MAX_RETRY = int(os.getenv("MAX_RETRY", "3"))
+ARCHIVE_MISSING_THRESHOLD = max(2, int(os.getenv("ARCHIVE_MISSING_THRESHOLD", "2")))
 PRINTED_PAGE_SIZE = int(os.getenv("PRINTED_PAGE_SIZE", "100"))
 SYNC_SHIPPING_DETAILS = os.getenv("SYNC_SHIPPING_DETAILS", "false").strip().lower() == "true"
 
@@ -474,6 +475,134 @@ def add_history_event(supabase, case_id, event_type, event_time, title, descript
     }).execute()
     return True
 
+def mark_shipping_source_seen(supabase, case_id):
+    """
+    Tandai case sebagai masih terlihat di sumber Pengiriman Surat.
+    Jika sebelumnya terarsip, pulihkan otomatis tanpa menghapus riwayat arsip.
+    """
+    current = (
+        supabase.table("etle_cases")
+        .select("case_id,is_archived")
+        .eq("case_id", case_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    was_archived = bool(current and current[0].get("is_archived"))
+    supabase.table("etle_cases").update({
+        "source_visible": True,
+        "last_seen_source_at": now_iso(),
+        "source_missing_since": None,
+        "missing_full_sync_count": 0,
+        "is_archived": False,
+        "archived_at": None,
+        "archive_reason": None,
+    }).eq("case_id", case_id).execute()
+    if was_archived:
+        add_history_event(
+            supabase, case_id, "SOURCE_RESTORED", now_iso(),
+            "Pelanggaran aktif kembali",
+            "Data kembali ditemukan pada Pengiriman Surat ETLE Hub.",
+            "GSMART_ARCHIVE"
+        )
+    return was_archived
+
+
+def reconcile_shipping_archives(supabase, seen_refs):
+    """
+    Soft-archive hanya dijalankan setelah FULL sync SHIPPING sukses 100%.
+
+    Aturan aman:
+    - hanya case yang sudah pernah ada di etle_shipping;
+    - tidak ditemukan lagi pada daftar Pengiriman Surat full-sync;
+    - belum mempunyai proses lanjutan (blanko/sanggah/dihentikan/sidang);
+    - harus hilang pada >= ARCHIVE_MISSING_THRESHOLD full sync berturut-turut;
+    - tidak pernah DELETE record.
+    """
+    if SYNC_MODE != "full":
+        return {"checked": 0, "missing": 0, "archived": 0}
+
+    shipping_rows = (
+        supabase.table("etle_shipping")
+        .select("case_id,ref_number,printed_date")
+        .execute()
+        .data
+    )
+    from_date = ddmmyyyy_to_iso(DATE_FROM)
+    shipping_rows = [
+        x for x in shipping_rows
+        if x.get("case_id") and x.get("ref_number")
+        and (not x.get("printed_date") or str(x.get("printed_date")) >= from_date)
+    ]
+
+    downstream = set()
+    for table in ("etle_disputes", "etle_terminated_cases", "etle_court_info"):
+        rows = supabase.table(table).select("case_id").execute().data
+        downstream.update(x.get("case_id") for x in rows if x.get("case_id"))
+    blanko_rows = (
+        supabase.table("etle_cases")
+        .select("case_id,no_blanko")
+        .execute()
+        .data
+    )
+    downstream.update(x.get("case_id") for x in blanko_rows if x.get("case_id") and clean(x.get("no_blanko")))
+
+    by_case = {}
+    for row in shipping_rows:
+        by_case[row["case_id"]] = row
+
+    checked = missing = archived = 0
+    for case_id, row in by_case.items():
+        checked += 1
+        ref = clean(row.get("ref_number"))
+        if not ref or ref in seen_refs or case_id in downstream:
+            continue
+
+        current = (
+            supabase.table("etle_cases")
+            .select("case_id,is_archived,missing_full_sync_count,source_missing_since")
+            .eq("case_id", case_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not current:
+            continue
+        current = current[0]
+        old_count = int(current.get("missing_full_sync_count") or 0)
+        new_count = old_count + 1
+        was_archived = bool(current.get("is_archived"))
+        missing += 1
+
+        patch = {
+            "source_visible": False,
+            "source_missing_since": current.get("source_missing_since") or now_iso(),
+            "missing_full_sync_count": new_count,
+        }
+
+        if new_count >= ARCHIVE_MISSING_THRESHOLD:
+            patch.update({
+                "is_archived": True,
+                "archived_at": current.get("archived_at") or now_iso(),
+                "archive_reason": "Tidak ditemukan pada Pengiriman Surat ETLE Hub dalam "
+                                  f"{ARCHIVE_MISSING_THRESHOLD} full sync berturut-turut",
+            })
+            if not was_archived:
+                archived += 1
+
+        supabase.table("etle_cases").update(patch).eq("case_id", case_id).execute()
+
+        if new_count >= ARCHIVE_MISSING_THRESHOLD and not was_archived:
+            add_history_event(
+                supabase, case_id, "SOURCE_ARCHIVED", now_iso(),
+                "Dipindahkan ke arsip G-Smart",
+                patch["archive_reason"],
+                "GSMART_ARCHIVE"
+            )
+
+    return {"checked": checked, "missing": missing, "archived": archived}
+
+
 # ============================================================
 # SHIPPING
 # ============================================================
@@ -725,6 +854,8 @@ def sync_shipping(page, supabase):
     started = now_iso(); found = ok = failed = 0
     new_items = []
     notified_source_ids = set()
+    seen_refs = set()
+    restored = 0
     detail_checked = detail_updated = detail_skipped = detail_failed = 0
     try:
         baseline_ready = sync_baseline_exists(supabase, SHIPPING_FCM_BASELINE_MODULE)
@@ -735,6 +866,7 @@ def sync_shipping(page, supabase):
                 ref = clean(item.get("ref_number"))
                 if not ref:
                     raise RuntimeError("ref_number kosong")
+                seen_refs.add(ref)
                 case = ensure_case(
                     supabase,
                     ref_number=ref,
@@ -782,6 +914,8 @@ def sync_shipping(page, supabase):
                     "updated_at": now_iso(),
                 }
                 upsert(supabase, "etle_shipping", compact_row(shipping_row), "source_id")
+                if mark_shipping_source_seen(supabase, case["case_id"]):
+                    restored += 1
 
                 # Pilih maksimal satu event per source_id. Lifecycle spesifik
                 # mengalahkan SHIPPING_PROCESSED generik.
@@ -797,7 +931,7 @@ def sync_shipping(page, supabase):
                     })
                     notified_source_ids.add(shipping_row["source_id"])
                 if shipping_row.get("printed_at"):
-                    add_history_event(supabase, case["case_id"], "LETTER_PRINTED", shipping_row["printed_at"], "Surat tilang dicetak", f"TNKB {shipping_row.get('tnkb')}", "ETLE_SHIPPING")
+                    add_history_event(supabase, case["case_id"], "LETTER_PRINTED", shipping_row["printed_at"], "Surat Konfirmasi Dicetak", f"TNKB {shipping_row.get('tnkb')}", "ETLE_SHIPPING")
                 if shipping_row.get("delivered_at"):
                     add_history_event(supabase, case["case_id"], "LETTER_DELIVERED", shipping_row["delivered_at"], "Surat diterima", shipping_row.get("status_description"), "ETLE_SHIPPING")
 
@@ -819,14 +953,22 @@ def sync_shipping(page, supabase):
                 failed += 1; log(f"[SHIPPING {i}/{found}] GAGAL: {exc}")
         status = "SUCCESS" if failed == 0 else "PARTIAL"
         write_sync_log(supabase, "SHIPPING", started, status, found, ok, failed)
+        archive_summary = {"checked": 0, "missing": 0, "archived": 0}
         if failed == 0:
             update_sync_state(supabase, "SHIPPING")
             # Marker khusus ini membuktikan baseline dibuat setelah fitur FCM,
             # bukan sekadar successful SHIPPING sync dari versi lama.
             update_sync_state(supabase, SHIPPING_FCM_BASELINE_MODULE)
+            archive_summary = reconcile_shipping_archives(supabase, seen_refs)
+        else:
+            log("Archive reconciliation dilewati karena SHIPPING sync tidak 100% sukses.")
         return {
             "found": found, "success": ok, "failed": failed,
             "new": len(new_items), "new_items": new_items,
+            "restored_from_archive": restored,
+            "archive_checked": archive_summary["checked"],
+            "archive_missing": archive_summary["missing"],
+            "archive_new": archive_summary["archived"],
             "detail_checked": detail_checked,
             "detail_updated": detail_updated,
             "detail_skipped": detail_skipped,
