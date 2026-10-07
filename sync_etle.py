@@ -551,16 +551,16 @@ def reconcile_shipping_archives(supabase, seen_refs):
     for row in shipping_rows:
         by_case[row["case_id"]] = row
 
-    checked = missing = archived = 0
+    checked = missing = archived = downstream_cleared = 0
     for case_id, row in by_case.items():
         checked += 1
         ref = clean(row.get("ref_number"))
-        if not ref or ref in seen_refs or case_id in downstream:
+        if not ref or ref in seen_refs:
             continue
 
         current = (
             supabase.table("etle_cases")
-            .select("case_id,is_archived,missing_full_sync_count,source_missing_since")
+            .select("case_id,is_archived,missing_full_sync_count,source_missing_since,archived_at")
             .eq("case_id", case_id)
             .limit(1)
             .execute()
@@ -569,6 +569,21 @@ def reconcile_shipping_archives(supabase, seen_refs):
         if not current:
             continue
         current = current[0]
+
+        # Case yang sudah lanjut ke Blanko/Tersanggah/Dihentikan/Persidangan
+        # bukan "hilang"; ia memang telah berpindah tahap proses.
+        if case_id in downstream:
+            if int(current.get("missing_full_sync_count") or 0) > 0 or current.get("is_archived"):
+                supabase.table("etle_cases").update({
+                    "source_visible": False,
+                    "source_missing_since": None,
+                    "missing_full_sync_count": 0,
+                    "is_archived": False,
+                    "archived_at": None,
+                    "archive_reason": None,
+                }).eq("case_id", case_id).execute()
+                downstream_cleared += 1
+            continue
         old_count = int(current.get("missing_full_sync_count") or 0)
         new_count = old_count + 1
         was_archived = bool(current.get("is_archived"))
@@ -600,7 +615,12 @@ def reconcile_shipping_archives(supabase, seen_refs):
                 "GSMART_ARCHIVE"
             )
 
-    return {"checked": checked, "missing": missing, "archived": archived}
+    return {
+        "checked": checked,
+        "missing": missing,
+        "archived": archived,
+        "downstream_cleared": downstream_cleared,
+    }
 
 
 # ============================================================
@@ -977,22 +997,18 @@ def sync_shipping(page, supabase):
                 failed += 1; log(f"[SHIPPING {i}/{found}] GAGAL: {exc}")
         status = "SUCCESS" if failed == 0 else "PARTIAL"
         write_sync_log(supabase, "SHIPPING", started, status, found, ok, failed)
-        archive_summary = {"checked": 0, "missing": 0, "archived": 0}
         if failed == 0:
             update_sync_state(supabase, "SHIPPING")
             # Marker khusus ini membuktikan baseline dibuat setelah fitur FCM,
             # bukan sekadar successful SHIPPING sync dari versi lama.
             update_sync_state(supabase, SHIPPING_FCM_BASELINE_MODULE)
-            archive_summary = reconcile_shipping_archives(supabase, seen_refs)
         else:
-            log("Archive reconciliation dilewati karena SHIPPING sync tidak 100% sukses.")
+            log("Archive reconciliation akan dilewati karena SHIPPING sync tidak 100% sukses.")
         return {
             "found": found, "success": ok, "failed": failed,
             "new": len(new_items), "new_items": new_items,
             "restored_from_archive": restored,
-            "archive_checked": archive_summary["checked"],
-            "archive_missing": archive_summary["missing"],
-            "archive_new": archive_summary["archived"],
+            "_seen_refs": sorted(seen_refs),
             "detail_checked": detail_checked,
             "detail_updated": detail_updated,
             "detail_skipped": detail_skipped,
@@ -1488,10 +1504,22 @@ def main():
 
             # Satu login, empat sumber.
             summaries["shipping"] = sync_shipping(page, supabase)
+            shipping_seen_refs = set(summaries["shipping"].pop("_seen_refs", []))
             summaries["disputes"] = sync_disputes(page, supabase)
             summaries["blanko"] = sync_blanko(page, supabase)
             summaries["terminated"] = sync_terminated(page, supabase)
             summaries["link_repair"] = repair_links(supabase)
+
+            # Evaluasi arsip harus dilakukan SETELAH semua tahap lanjutan selesai
+            # agar case yang berubah menjadi Blanko/Tersanggah/Dihentikan/Persidangan
+            # tidak salah dianggap hilang dari ETLE Hub.
+            if summaries["shipping"].get("failed", 0) == 0:
+                summaries["archive"] = reconcile_shipping_archives(supabase, shipping_seen_refs)
+            else:
+                summaries["archive"] = {
+                    "checked": 0, "missing": 0, "archived": 0,
+                    "downstream_cleared": 0, "skipped": "shipping_partial"
+                }
 
             # WA hanya untuk Blanko baru + Tersanggah baru.
             # Kegagalan WA tidak menggagalkan sync.
