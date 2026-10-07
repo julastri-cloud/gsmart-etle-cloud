@@ -1,0 +1,63 @@
+name: G-SMART Archive Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true = hanya cek/simulasi, false = terapkan status arsip"
+        required: true
+        type: choice
+        options:
+          - "true"
+          - "false"
+        default: "true"
+
+jobs:
+  archive-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright supabase python-dotenv requests firebase-admin
+          python -m playwright install --with-deps chromium
+
+      - name: Verify ETLE archive candidates
+        env:
+          EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
+          PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+          SYNC_MODE: "full"
+          DATE_FROM: "01-08-2026"
+          TEST_LIMIT: "0"
+          HEADLESS: "true"
+          REQUEST_DELAY: "0.5"
+          MAX_RETRY: "3"
+          PRINTED_PAGE_SIZE: "100"
+          ARCHIVE_MISSING_THRESHOLD: "2"
+
+          DRY_RUN: ${{ inputs.dry_run }}
+
+        run: |
+          python archive_verification.py
+
+      - name: Upload verification result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-verification-result
+          path: archive_verification_result.json
+          if-no-files-found: warn
+          retention-days: 3
