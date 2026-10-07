@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright supabase python-dotenv firebase-admin
+          pip install playwright supabase python-dotenv requests firebase-admin
           python -m playwright install --with-deps chromium
 
       - name: Apply shipping detail wait fix
@@ -34,26 +34,61 @@ jobs:
 
           path = Path('sync_etle.py')
           text = path.read_text(encoding='utf-8')
+
           old = '''    page.goto(detail_url, wait_until="domcontentloaded", timeout=60000)\n    try:\n        page.evaluate("window.stop()")\n    except Exception:\n        pass\n    page.wait_for_timeout(150)\n'''
-          new = '''    page.goto(detail_url, wait_until="domcontentloaded", timeout=60000)\n    try:\n        page.wait_for_load_state("networkidle", timeout=30000)\n    except Exception:\n        pass\n    # printed_detail mengisi informasi kendaraan setelah DOM awal selesai.\n    # Beri waktu yang sama dengan sync_single_blue yang sudah terbukti stabil.\n    page.wait_for_timeout(1000)\n'''
+
+          new = '''    page.goto(detail_url, wait_until="domcontentloaded", timeout=60000)\n    try:\n        page.wait_for_load_state("networkidle", timeout=30000)\n    except Exception:\n        pass\n    # printed_detail mengisi informasi kendaraan setelah DOM awal selesai.
+    # Beri waktu yang sama dengan sync_single_blue yang sudah terbukti stabil.
+    page.wait_for_timeout(1000)\n'''
+
           if old not in text:
-              raise SystemExit('Target shipping detail block tidak ditemukan; patch dibatalkan agar aman.')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+              raise SystemExit(
+                  'Target shipping detail block tidak ditemukan; patch dibatalkan agar aman.'
+              )
+
+          path.write_text(
+              text.replace(old, new, 1),
+              encoding='utf-8'
+          )
+
           print('Shipping detail wait fix applied.')
           PY
 
       - name: Run ETLE full sync
         env:
+          # ==================================================
+          # ETLE HUB
+          # ==================================================
           EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
           PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+
+          # ==================================================
+          # SUPABASE
+          # ==================================================
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+          # ==================================================
+          # WHATSAPP FONNTE
+          # ==================================================
+          FONNTE_TOKEN: ${{ secrets.FONNTE_TOKEN }}
+          WA_TARGET: ${{ secrets.WA_TARGET }}
+
+          # ==================================================
+          # FIREBASE
+          # ==================================================
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
+          # ==================================================
+          # SYNC CONFIGURATION
+          # ==================================================
           SYNC_MODE: 'full'
           DATE_FROM: '01-08-2026'
           TEST_LIMIT: '0'
 
+          # ==================================================
+          # PLAYWRIGHT / REQUEST
+          # ==================================================
           HEADLESS: 'true'
           REQUEST_DELAY: '0.5'
           MAX_RETRY: '3'
