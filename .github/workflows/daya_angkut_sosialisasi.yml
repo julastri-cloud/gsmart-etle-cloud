@@ -1,6 +1,8 @@
 name: G-SMART Konfirmasi Daya Angkut Sosialisasi
 
 on:
+  schedule:
+    - cron: "30 0,10 * * *" # 07.30 & 17.30 WIB
   workflow_dispatch:
     inputs:
       dry_run:
