@@ -97,6 +97,7 @@ def main():
         raise RuntimeError("Nomor Registrasi tidak ditemukan")
     case = resolve_case(sb, ref)
 
+    is_daya_angkut = "DAYA ANGKUT" in DETAIL_TYPE.upper()
     row = {
         "case_id": case["case_id"],
         "violation_id": case.get("violation_id"),
@@ -108,7 +109,9 @@ def main():
         "no_mesin": clean(blue.get("No Mesin")),
         "no_rangka": clean(blue.get("No Rangka")),
         "masa_berlaku_kir": clean(blue.get("Masa Berlaku KIR")),
-        "jbi": num(blue.get("JBI/JBKB")),
+        "jbi": num(pel.get("JBI/JBKB")) if is_daya_angkut else num(blue.get("JBI/JBKB")),
+        "berat_timbang": num(pel.get("Berat Timbang")) if is_daya_angkut else None,
+        "berat_lebih": num(pel.get("Berat Lebih")) if is_daya_angkut else None,
     }
     row = {k: v for k, v in row.items() if v is not None}
 
@@ -117,7 +120,17 @@ def main():
         "case": case,
         "nomor_registrasi": ref,
         "blue_source": blue,
+        "pelanggaran_source": pel,
         "supabase_row": row,
+        "weight_check": {
+            "jbi": row.get("jbi"),
+            "berat_timbang": row.get("berat_timbang"),
+            "berat_lebih": row.get("berat_lebih"),
+            "persentase_lebih": (
+                round(row["berat_lebih"] / row["jbi"] * 100, 2)
+                if row.get("jbi") and row.get("berat_lebih") is not None else None
+            ),
+        },
         "not_mapped_yet": {
             "warna_kendaraan": clean(blue.get("Warna Kendaraan")),
             "tanggal_uji_kir": clean(blue.get("Tanggal Uji KIR")),
@@ -126,6 +139,7 @@ def main():
 
     log("Case ID: " + case["case_id"])
     log("BLUE source: " + json.dumps(blue, ensure_ascii=False))
+    log("Data Pelanggaran source: " + json.dumps(pel, ensure_ascii=False))
     log("Supabase row: " + json.dumps(row, ensure_ascii=False))
 
     if DRY_RUN:
