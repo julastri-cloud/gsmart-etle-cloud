@@ -1,11 +1,6 @@
 name: G-SMART ETLE Full Weekly
 
 on:
-  schedule:
-    # Setiap Minggu pukul 02:00 WIB
-    # GitHub Actions menggunakan UTC → Sabtu 19:00 UTC
-    - cron: '0 19 * * 6'
-
   workflow_dispatch:
 
 jobs:
