@@ -1,0 +1,30 @@
+name: Validasi Integrasi Incremental ke G-Smart Web Push
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/sync_supabase.yml'
+      - '.github/workflows/validate_pwa_push.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-web-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout public G-Smart PWA sender (same as production workflow)
+        uses: actions/checkout@v4
+        with:
+          repository: uppkb-guyangan/uppkb-guyangan.github.io
+          ref: main
+          path: gsmart-web-push
+          sparse-checkout: scripts
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run Web Push sender tests (offline, no secrets)
+        run: node --test gsmart-web-push/scripts/push-pilot.test.mjs gsmart-web-push/scripts/push-production.test.mjs
