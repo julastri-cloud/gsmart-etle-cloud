@@ -78,3 +78,36 @@ jobs:
 
         run: |
           python sync_etle.py
+
+  # Runs only after the ETLE incremental sync job succeeds.
+  # Does not change the source sync, Android FCM, or WhatsApp handling.
+  notify-web-pwa:
+    name: Kirim Push G-Smart PWA setelah sinkronisasi
+    needs: sync
+    if: ${{ needs.sync.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout latest G-Smart Web Push sender
+        uses: actions/checkout@v4
+        with:
+          repository: uppkb-guyangan/uppkb-guyangan.github.io
+          ref: main
+          path: gsmart-web-push
+          sparse-checkout: scripts
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Kirim push PWA untuk perubahan ETLE baru
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          PUSH_MODE: run
+        run: node gsmart-web-push/scripts/push-production.mjs
