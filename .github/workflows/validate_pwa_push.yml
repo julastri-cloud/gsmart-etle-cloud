@@ -19,7 +19,9 @@ jobs:
           repository: uppkb-guyangan/uppkb-guyangan.github.io
           ref: main
           path: gsmart-web-push
-          sparse-checkout: scripts
+          sparse-checkout: |
+            scripts
+            gsmart-push-sw
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
