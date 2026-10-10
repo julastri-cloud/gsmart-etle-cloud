@@ -57,8 +57,42 @@ EXTRACTION_JS = r"""
     }
   }
   const evidence = document.querySelector("#InformasiDokumenAlasan");
-  const reasonEl = document.querySelector("#alasanLainnya");
-  const reason = reasonEl ? clean(reasonEl.value || reasonEl.innerText || reasonEl.textContent) : "";
+  // Use only explicitly labelled objection-reason fields. An unrelated
+  // "alasan_lainnya" field in a later TERMINATED record is NOT a dispute reason.
+  const reasonLabel = /^(alasan(?: sanggahan| keberatan| pelanggar)?|jenis sanggahan|keterangan sanggahan|alasan lainnya)$/i;
+  const normalizeReason = text => {
+    const value = clean(text);
+    if (!value || /^(-|tidak ada|pilih|pilih alasan|select|\W+)$/i.test(value)
+      || /^https?:\/\//i.test(value) || value.length>500) return "";
+    return value;
+  };
+  const candidates = [];
+  const explicit = document.querySelector("#alasanLainnya");
+  if(explicit){
+    candidates.push(explicit.value || (explicit.matches("input,textarea,select") ? "" : explicit.innerText));
+  }
+  for(const section of ["#InformasiDokumenAlasan","#informasiPelanggar","#detailPelanggaran"]){
+    const root=document.querySelector(section);
+    if(!root)continue;
+    for(const row of root.querySelectorAll("tr")){
+      const cells=[...row.querySelectorAll(":scope > td,:scope > th")];
+      if(cells.length>=2 && reasonLabel.test(clean(cells[0].innerText).replace(/:$/,""))){
+        candidates.push(cells.slice(1).map(el=>el.innerText).join(" ").replace(/^\s*:\s*/,""));
+      }
+    }
+    for(const el of root.querySelectorAll("textarea,input,select")){
+      if(el.type==="hidden"||el.type==="password")continue;
+      const ident=clean((el.name||"")+" "+(el.id||""));
+      const associated=el.id ? root.querySelector('label[for="'+CSS.escape(el.id)+'"]') : null;
+      const label=clean(associated?.innerText || el.closest("label")?.innerText || "");
+      if(/alasan|sanggahan|keberatan/i.test(ident) || reasonLabel.test(label.replace(/:$/,""))){
+        const value=el.matches("select")?el.selectedOptions?.[0]?.textContent:
+          (el.type==="radio"||el.type==="checkbox")?(el.checked?(label||el.value):""):el.value;
+        candidates.push(value);
+      }
+    }
+  }
+  const reason=candidates.map(normalizeReason).find(Boolean)||"";
   const media = node => {
     if (!node) return [];
     const nodes=[...node.querySelectorAll("img[src],a[href],object[data],embed[src],iframe[src]")].slice(0,8);
