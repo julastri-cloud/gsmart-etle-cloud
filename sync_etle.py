@@ -573,12 +573,7 @@ def reconcile_shipping_archives(supabase, seen_refs):
     for table in ("etle_disputes", "etle_terminated_cases", "etle_court_info"):
         rows = select_all_pages(supabase, table, "case_id")
         downstream.update(x.get("case_id") for x in rows if x.get("case_id"))
-    blanko_rows = (
-        supabase.table("etle_cases")
-        .select("case_id,no_blanko")
-        .execute()
-        .data
-    )
+    blanko_rows = select_all_pages(supabase, "etle_cases", "case_id,no_blanko")
     downstream.update(x.get("case_id") for x in blanko_rows if x.get("case_id") and clean(x.get("no_blanko")))
 
     by_case = {}
