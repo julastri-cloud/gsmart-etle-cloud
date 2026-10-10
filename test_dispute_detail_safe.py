@@ -1,7 +1,7 @@
 """Offline checks for the read-only ETLE dispute detail probe."""
 import unittest
 from urllib.parse import urlparse,parse_qs
-from diagnose_dispute_detail_safe import detail_url,DOM_PROBE,SAFE_DETAIL_ID,detail_report_ok
+from diagnose_dispute_detail_safe import detail_url,DOM_PROBE,MEDIA_PROBE,SAFE_DETAIL_ID,detail_report_ok
 
 
 class SafeDisputeProbeTests(unittest.TestCase):
@@ -42,6 +42,17 @@ class SafeDisputeProbeTests(unittest.TestCase):
                     "on_expected_detail_path":path,
                     "probe":{"detail_sections_present":sections},
                 }))
+
+    def test_media_probe_is_structural_only(self):
+        self.assertIn("informasi_pelanggar:",MEDIA_PROBE)
+        self.assertIn("dokumen_sanggahan:",MEDIA_PROBE)
+        self.assertIn("status_muat:",MEDIA_PROBE)
+        self.assertIn("jenis_sumber:",MEDIA_PROBE)
+        self.assertIn("format_sumber:",MEDIA_PROBE)
+        self.assertNotIn("console.log",MEDIA_PROBE)
+        self.assertNotIn("outerHTML",MEDIA_PROBE)
+        self.assertNotIn("innerHTML",MEDIA_PROBE)
+        self.assertNotIn("fetch(",MEDIA_PROBE)
 
     def test_safe_dom_probe_returns_only_fixed_labels_and_structural_counts(self):
         self.assertIn("sections:",DOM_PROBE)
