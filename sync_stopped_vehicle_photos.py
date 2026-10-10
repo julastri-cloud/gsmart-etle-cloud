@@ -26,7 +26,7 @@ PHOTO_JS=r"""
 () => {
  const img=document.querySelector("#foto_bukti_frame");
  if(!img||img.tagName!=="IMG")return {available:false};
- const src=img.getAttribute("src")||img.currentSrc||"";
+ const src=img.currentSrc||img.src||img.getAttribute("src")||"";
  return {
    available:img.complete&&img.naturalWidth>=800&&img.naturalHeight>=500,
    src, width:img.naturalWidth,height:img.naturalHeight
