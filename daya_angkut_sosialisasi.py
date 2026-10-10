@@ -42,6 +42,16 @@ def verify_daya_angkut_confirmations(page, supabase):
         and (not row.get("printed_date") or str(row.get("printed_date")) >= from_date)
     ]
 
+    # Safety: absence can only be interpreted when the historical ETLE source
+    # returns a sufficiently complete, plausible snapshot. A truncated/empty
+    # DataTables response is NOT an official transport confirmation.
+    historical_refs = {core.clean(x.get("ref_number")) for x in shipping_rows
+                       if core.clean(x.get("ref_number"))}
+    overlap = len(seen_refs & historical_refs)
+    min_overlap = max(5, int(len(historical_refs) * 0.7)) if len(historical_refs) >= 10 else 1
+    if not rows or (historical_refs and overlap < min_overlap):
+        raise RuntimeError("SOURCE_SHIPPING_SNAPSHOT_INCOMPLETE")
+
     downstream = set()
     for table in ("etle_disputes", "etle_terminated_cases", "etle_court_info"):
         data = supabase.table(table).select("case_id").execute().data
@@ -217,10 +227,16 @@ def main():
     log("=" * 72)
     log("G-SMART KONFIRMASI DAYA ANGKUT SOSIALISASI SELESAI")
     log("=" * 72)
-    log(json.dumps(result, ensure_ascii=False, indent=2))
+    # Do not expose TNKB, ETLE reference numbers or personal case metadata
+    # in GitHub Actions logs and downloadable artifacts.
+    public_summary = {
+        key: (len(value) if isinstance(value, list) else value)
+        for key, value in result.items()
+    }
+    log(json.dumps(public_summary, ensure_ascii=False, indent=2))
 
     with open("daya_angkut_sosialisasi_result.json", "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+        json.dump(public_summary, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":
