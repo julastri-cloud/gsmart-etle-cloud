@@ -19,6 +19,13 @@ def log(message):
     print(message, flush=True)
 
 
+def source_shipping_snapshot_is_complete(rows, seen_refs, historical_refs):
+    if not rows:
+        return False
+    min_overlap = max(5, int(len(historical_refs) * 0.7)) if len(historical_refs) >= 10 else 1
+    return not historical_refs or len(seen_refs & historical_refs) >= min_overlap
+
+
 def verify_daya_angkut_confirmations(page, supabase):
     # Hanya membaca daftar Pengiriman Surat. Tidak membuka printed_detail.
     rows = core.get_printed_list(page)
@@ -47,9 +54,7 @@ def verify_daya_angkut_confirmations(page, supabase):
     # DataTables response is NOT an official transport confirmation.
     historical_refs = {core.clean(x.get("ref_number")) for x in shipping_rows
                        if core.clean(x.get("ref_number"))}
-    overlap = len(seen_refs & historical_refs)
-    min_overlap = max(5, int(len(historical_refs) * 0.7)) if len(historical_refs) >= 10 else 1
-    if not rows or (historical_refs and overlap < min_overlap):
+    if not source_shipping_snapshot_is_complete(rows, seen_refs, historical_refs):
         raise RuntimeError("SOURCE_SHIPPING_SNAPSHOT_INCOMPLETE")
 
     downstream = set()
