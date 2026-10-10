@@ -1025,7 +1025,10 @@ def sync_shipping(page, supabase):
 # BLANKO + DETAIL
 # ============================================================
 def get_blanko_list(page):
-    url = f"{URL_LIST_BLANKO}?dateFrom={DATE_FROM}&dateTo={DATE_TO}&status=&_={int(time.time()*1000)}"
+    # ETLE date filters refer to source-period rows, not necessarily when a
+    # previously issued blanko changes payment/court state. Read history
+    # from the G-Smart baseline, even on incremental runs.
+    url = f"{URL_LIST_BLANKO}?dateFrom={FULL_DATE_FROM}&dateTo={DATE_TO_NEXT}&status=&_={int(time.time()*1000)}"
     parsed = browser_fetch(page, url)
     if isinstance(parsed, list):
         rows = parsed
@@ -1294,7 +1297,9 @@ def sync_blanko(page, supabase):
 # DISPUTES
 # ============================================================
 def get_disputes(page):
-    p = {"dateFrom": f"{DATE_FROM} 00:00", "dateTo": f"{DATE_TO_NEXT} 00:00", "status": "Tersanggah", "_": int(time.time() * 1000)}
+    # An old violation can be newly disputed, so use the historical baseline
+    # rather than only the violation date's 14-day lookback.
+    p = {"dateFrom": f"{FULL_DATE_FROM} 00:00", "dateTo": f"{DATE_TO_NEXT} 00:00", "status": "Tersanggah", "_": int(time.time() * 1000)}
     parsed = browser_fetch(page, URL_DISPUTES + "?" + urlencode(p))
     rows = parsed.get("data", [])
     if not isinstance(rows, list): raise RuntimeError("JSON Tersanggah tidak dikenali")
