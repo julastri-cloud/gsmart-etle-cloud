@@ -51,6 +51,21 @@ class AutoPrivateEvidenceTests(unittest.TestCase):
         self.assertFalse(eligible(d,{**full,"source_checked_at":(NOW-timedelta(hours=100)).isoformat()},NOW))
         self.assertTrue(eligible(d,{**full,"source_checked_at":(NOW-timedelta(hours=169)).isoformat()},NOW))
 
+    def test_force_backfill_new_text_fields_without_changing_default_cooldown(self):
+        dispute={"case_id":A,"violation_id":"80971"}
+        recent={
+            "source_checked_at":(NOW-timedelta(hours=1)).isoformat(),
+            "offender_data":True,
+            "sim_object_path":True,
+            "document_object_path":True,
+            "dispute_reason":False,
+            "dispute_explanation":False
+        }
+        self.assertFalse(eligible(dispute,recent,NOW))
+        self.assertTrue(eligible(dispute,recent,NOW,force_missing_text=True))
+        self.assertEqual(len(select_batch([dispute],{A:recent},NOW,25,force_missing_text=True)),1)
+        self.assertFalse(eligible(dispute,{**recent,"dispute_reason":True,"dispute_explanation":True},NOW,force_missing_text=True))
+
     def test_updated_private_data_keeps_existing_images_when_source_absent(self):
         fake_page=Mock()
         fake_page.goto.return_value=Mock(status=200)
