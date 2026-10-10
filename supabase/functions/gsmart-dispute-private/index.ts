@@ -62,7 +62,7 @@ function serviceConfig() {
 async function fetchMetadata(caseId:string) {
   const {url,key}=serviceConfig();
   const params=new URLSearchParams({
-    select:"case_id,offender_data,dispute_reason,sim_object_path,document_object_path,updated_at",
+    select:"case_id,offender_data,dispute_reason,dispute_explanation,sim_object_path,document_object_path,updated_at",
     case_id:"eq."+caseId,
     limit:"1"
   });
@@ -120,6 +120,7 @@ Deno.serve(async (req:Request) => {
         case_id:caseId,
         offender,
         reason:record.dispute_reason || null,
+        explanation:record.dispute_explanation || null,
         has_sim:!!safeEvidencePath(caseId,"sim",record.sim_object_path),
         has_document:!!safeEvidencePath(caseId,"document",record.document_object_path),
         updated_at:record.updated_at
