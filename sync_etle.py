@@ -1022,6 +1022,125 @@ def sync_shipping(page, supabase):
         write_sync_log(supabase, "SHIPPING", started, "FAILED", found, ok, failed, str(exc)); raise
 
 # ============================================================
+# INCREMENTAL SHIPPING: LIGHTWEIGHT HISTORICAL STATUS REFRESH
+# ============================================================
+def plan_historical_shipping_updates(source_rows, saved_rows, cutoff):
+    """Pure plan: old printed rows only; never clear valid fields with blanks."""
+    saved = {str(row.get("source_id")): row for row in saved_rows
+             if row.get("source_id") is not None}
+    changes = []
+    historical_seen = set()
+    unknown_historical = 0
+    for item in source_rows:
+        source_id = str(item.get("id") or "")
+        if not source_id or source_id in historical_seen:
+            continue
+        old = saved.get(source_id)
+        if not old:
+            # A record published late with a historical printed date requires
+            # full detail ingestion. Warn rather than make up case associations.
+            unknown_historical += 1
+            continue
+        if old.get("printed_date") and str(old["printed_date"]) >= cutoff:
+            continue
+        historical_seen.add(source_id)
+        patch = {}
+        for field, value in (
+            ("status", clean(item.get("status"))),
+            ("status_description", clean(item.get("desc_terakhir"))),
+            ("tracking_number", clean(item.get("no_resi"))),
+        ):
+            if value and str(old.get(field) or "").strip() != value:
+                patch[field] = value
+        if patch:
+            changes.append((source_id, old, item, patch))
+    return changes, len(historical_seen), unknown_historical
+
+
+def sync_shipping_historical_statuses(page, supabase):
+    """Read history with inexpensive source paging, update only changed shipping rows.
+
+    New historical records are NOT imported here (full-sync handles detailed
+    source/case linkage); no photo or BLUE lookups are made.
+    """
+    if SYNC_MODE != "incremental":
+        return {"checked": 0, "updated": 0, "status_events": 0, "unknown_source_ids": 0,
+                "new_items": []}
+    started = now_iso()
+    global DATE_FROM
+    original_start = DATE_FROM
+    try:
+        DATE_FROM = FULL_DATE_FROM
+        try:
+            source = get_printed_list(page)
+        finally:
+            DATE_FROM = original_start
+        saved = []
+        for offset in range(0, 10000, 1000):
+            batch = supabase.table("etle_shipping").select(
+                "source_id,case_id,ref_number,tnkb,status,status_description,"
+                "tracking_number,printed_date"
+            ).range(offset, offset + 999).execute().data
+            saved.extend(batch)
+            if len(batch) < 1000:
+                break
+        else:
+            raise RuntimeError("SHIPPING_HISTORY_DB_PAGE_LIMIT")
+        # Incomplete source snapshots must not change historical statuses.
+        if len(saved) >= 30 and len(source) < max(1, int(len(saved) * 0.7)):
+            raise RuntimeError("SHIPPING_HISTORY_SOURCE_COVERAGE_LOW")
+        if not source and saved:
+            raise RuntimeError("SHIPPING_HISTORY_SOURCE_EMPTY")
+        cutoff = ddmmyyyy_to_iso(original_start)
+        changes, checked, unknown = plan_historical_shipping_updates(source, saved, cutoff)
+        if len(changes) > max(20, int(max(checked, 1) * 0.2)):
+            raise RuntimeError("SHIPPING_HISTORY_BULK_CHANGE_UNEXPECTED")
+        notifications = []
+        baseline_ready = sync_baseline_exists(supabase, SHIPPING_FCM_BASELINE_MODULE)
+        for source_id, old, item, patch in changes:
+            new_status = patch.get("status") or old.get("status")
+            if "tracking_number" in patch:
+                patch["courier"] = "JNE"
+            if normalize_shipping_status(new_status) == "terkirim":
+                delivered = extract_delivery_datetime(item.get("desc_terakhir"))
+                if delivered:
+                    patch["delivered_at"] = delivered
+                    patch["last_event_at"] = delivered
+            patch["updated_at"] = now_iso()
+            supabase.table("etle_shipping").update(patch).eq("source_id", source_id).execute()
+            if patch.get("delivered_at") and old.get("case_id"):
+                add_history_event(
+                    supabase, old["case_id"], "LETTER_DELIVERED",
+                    patch["delivered_at"], "Surat diterima",
+                    patch.get("status_description") or old.get("status_description"),
+                    "ETLE_SHIPPING"
+                )
+            if "status" in patch and old.get("case_id"):
+                notification = select_shipping_notification(
+                    [old], {"status": new_status, "tracking_number":patch.get("tracking_number")
+                            or old.get("tracking_number")}, baseline_ready, SYNC_MODE
+                )
+                if notification:
+                    notifications.append({
+                        "event_type": notification,
+                        "case_id": old["case_id"],
+                        "ref_number": old.get("ref_number"),
+                        "tnkb": old.get("tnkb")
+                    })
+        write_sync_log(supabase, "SHIPPING_HISTORICAL", started,
+                       "SUCCESS", len(source), len(changes), 0)
+        if unknown:
+            print(f"::warning::Shipping historical: {unknown} unknown source records; full-sync required for new case/photo details.")
+        return {"checked": checked, "updated": len(changes),
+                "status_events": len(notifications), "unknown_source_ids": unknown,
+                "new_items": notifications}
+    except Exception as error:
+        write_sync_log(supabase, "SHIPPING_HISTORICAL", started,
+                       "FAILED", 0, 0, 1, type(error).__name__)
+        raise
+
+
+# ============================================================
 # BLANKO + DETAIL
 # ============================================================
 def get_blanko_list(page):
@@ -1522,6 +1641,15 @@ def main():
             # Satu login, empat sumber.
             summaries["shipping"] = sync_shipping(page, supabase)
             shipping_seen_refs = set(summaries["shipping"].pop("_seen_refs", []))
+            # Historical shipping status changes may affect old printed dates.
+            # This cheap source-only check never reopens printed_detail/photos.
+            try:
+                historical = sync_shipping_historical_statuses(page, supabase)
+                summaries["shipping"]["new_items"].extend(historical.pop("new_items", []))
+                summaries["shipping_historical"] = historical
+            except Exception as exc:
+                log("::warning::Historical shipping check failed: " + type(exc).__name__)
+                summaries["shipping_historical"] = {"warning": type(exc).__name__}
             summaries["disputes"] = sync_disputes(page, supabase)
             summaries["blanko"] = sync_blanko(page, supabase)
             summaries["terminated"] = sync_terminated(page, supabase)
