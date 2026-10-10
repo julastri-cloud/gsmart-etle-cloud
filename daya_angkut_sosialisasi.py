@@ -22,7 +22,7 @@ def log(message):
 def source_shipping_snapshot_is_complete(rows, seen_refs, historical_refs):
     if not rows:
         return False
-    min_overlap = max(5, int(len(historical_refs) * 0.7)) if len(historical_refs) >= 10 else 1
+    min_overlap = max(1, (len(historical_refs) * 7 + 9) // 10)
     return not historical_refs or len(seen_refs & historical_refs) >= min_overlap
 
 
