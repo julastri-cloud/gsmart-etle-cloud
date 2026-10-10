@@ -65,3 +65,38 @@ jobs:
 
         run: |
           python sync_etle.py
+
+  # Private evidence is a SEPARATE dependent job. It never alters ETLE records,
+  # WA/FCM notifications, normal vehicle photos, or existing sync counters.
+  sync-private-disputes:
+    name: Sinkronisasi privat SIM dan bukti sanggahan (aktif + dihentikan)
+    needs: full-sync
+    if: ${{ needs.full-sync.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    concurrency:
+      group: gsmart-etle-private-evidence
+      cancel-in-progress: false
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install private evidence dependencies
+        run: |
+          python -m pip install --disable-pip-version-check playwright requests
+          python -m playwright install --with-deps chromium
+      - name: Sync missing and changed dispute evidence (private only)
+        env:
+          EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
+          PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AUTO_PRIVATE_MAX_CASES: '25'
+          AUTO_PRIVATE_MISSING_RECHECK_HOURS: '24'
+          AUTO_PRIVATE_FULL_RECHECK_HOURS: '168'
+        run: python sync_private_disputes_auto.py
