@@ -1,0 +1,40 @@
+name: G-Smart Initial Private Dispute Backfill
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sync_private_disputes_auto.py'
+      - 'sync_private_dispute_one.py'
+      - 'extract_dispute_detail_readonly.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gsmart-etle-private-evidence
+  cancel-in-progress: false
+jobs:
+  initial-backfill:
+    name: Backfill missing private evidence for historical objections
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install evidence dependencies
+        run: |
+          python -m pip install --disable-pip-version-check playwright requests
+          python -m playwright install --with-deps chromium
+      - name: Import private evidence (bounded, independent from ETLE core)
+        env:
+          EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
+          PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AUTO_PRIVATE_MAX_CASES: '25'
+          AUTO_PRIVATE_MISSING_RECHECK_HOURS: '24'
+          AUTO_PRIVATE_FULL_RECHECK_HOURS: '168'
+        run: python sync_private_disputes_auto.py
+# Bootstrap runs on first merge to main, while ongoing sync is attached to
+# existing incremental / full workflows. Only aggregate non-PII metrics appear.

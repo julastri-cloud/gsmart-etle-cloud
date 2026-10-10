@@ -1,0 +1,47 @@
+name: Validate Private Objection Automation
+on:
+  pull_request:
+    paths:
+      - 'sync_private_disputes_auto.py'
+      - 'sync_private_dispute_one.py'
+      - 'extract_dispute_detail_readonly.py'
+      - 'test_private_disputes_auto.py'
+      - '.github/workflows/sync_supabase.yml'
+      - '.github/workflows/full_sync_weekly.yml'
+      - '.github/workflows/private_disputes_bootstrap.yml'
+      - '.github/workflows/validate_auto_private_disputes.yml'
+permissions:
+  contents: read
+jobs:
+  offline-tests:
+    name: Unit tests and workflow integrity without ETLE credentials
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install offline test dependencies
+        run: python -m pip install --disable-pip-version-check requests PyYAML
+      - name: Check Python syntax and private extraction tests
+        run: |
+          python -m py_compile sync_private_disputes_auto.py sync_private_dispute_one.py extract_dispute_detail_readonly.py
+          python -m unittest -q test_private_disputes_auto.py test_private_dispute_one.py test_dispute_detail_extraction_readonly.py
+      - name: Check dependent jobs do not change ETLE source behavior
+        run: |
+          python - <<'PY'
+          import yaml
+          from pathlib import Path
+          for name, parent in [('sync_supabase.yml','sync'),('full_sync_weekly.yml','full-sync')]:
+              data=yaml.safe_load((Path('.github/workflows')/name).read_text())
+              jobs=data['jobs']
+              assert 'sync-private-disputes' in jobs
+              assert jobs['sync-private-disputes']['needs']==parent
+              assert jobs['sync-private-disputes']['concurrency']['cancel-in-progress'] is False
+              assert jobs['sync-private-disputes']['steps'][-1]['run']=='python sync_private_disputes_auto.py'
+              assert jobs[parent]['steps'][-1]['run'].strip()=='python sync_etle.py'
+          bootstrap=yaml.safe_load(Path('.github/workflows/private_disputes_bootstrap.yml').read_text())
+          assert 'initial-backfill' in bootstrap['jobs']
+          print('PASS: Private evidence isolated from ETLE source and notification jobs')
+          PY
