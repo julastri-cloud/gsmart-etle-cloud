@@ -1385,9 +1385,17 @@ def sync_disputes(page, supabase):
 # TERMINATED
 # ============================================================
 def get_terminated(page):
-    # Endpoint ini memang memakai format campuran:
-    # dateFrom=YYYY-MM-DD, dateTo=DD-MM-YYYY
-    p = {"dateFrom": ddmmyyyy_to_iso(DATE_FROM), "dateTo": DATE_TO, "_": int(time.time() * 1000)}
+    # DIHENTIKAN endpoint is NOT a reliable recent-change feed.
+    # Confirmed 10 Oct 2026: 14-day request returned 0 records, while the
+    # 01 Aug historical request returned 16, including today's new STOPPED
+    # decision for a 01 Oct violation. Reading the history is necessary for
+    # transitions; other sync modules remain incremental/lookback=14 days.
+    # Endpoint uses mixed date formats: dateFrom ISO, dateTo DD-MM-YYYY.
+    p = {
+        "dateFrom": ddmmyyyy_to_iso(FULL_DATE_FROM),
+        "dateTo": DATE_TO_NEXT,
+        "_": int(time.time() * 1000),
+    }
     parsed = browser_fetch(page, URL_TERMINATED + "?" + urlencode(p))
     rows = parsed.get("data", [])
     if not isinstance(rows, list): raise RuntimeError("JSON Dihentikan tidak dikenali")
