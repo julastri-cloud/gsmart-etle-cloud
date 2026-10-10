@@ -1,0 +1,43 @@
+name: Validate Five-Module ETLE Audit Safety
+on:
+  pull_request:
+    paths:
+      - 'sync_etle.py'
+      - 'daya_angkut_sosialisasi.py'
+      - 'test_etle_five_module_audit.py'
+      - 'test_terminated_full_history_window.py'
+      - '.github/workflows/validate_five_module_sync_safety.yml'
+permissions:
+  contents: read
+jobs:
+  synthetic-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install imports, no ETLE access
+        run: python -m pip install --disable-pip-version-check requests supabase python-dotenv playwright firebase-admin
+      - name: Compile source and regression cases
+        run: python -m py_compile sync_etle.py daya_angkut_sosialisasi.py test_etle_five_module_audit.py
+      - name: Test source windows, old shipping, archive guard and notifications
+        run: |
+          python -m unittest -q             test_etle_five_module_audit.py             test_terminated_full_history_window.py             test_blanko_objection_notifications.py             test_shipping_notifications.py             test_shipping_lifecycle_notifications.py
+      - name: Prevent mutation of auth or private evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('sync_etle.py').read_text()
+          assert 'sync_shipping_historical_statuses(page, supabase)' in s
+          assert 'source_snapshot_incomplete' in s
+          assert 'FULL_DATE_FROM' in s
+          assert 'send_sync_wa_notification(' in s
+          assert 'send_sync_fcm_notifications(summaries)' in s
+          social=Path('daya_angkut_sosialisasi.py').read_text()
+          assert 'source_shipping_snapshot_is_complete' in social
+          assert 'DRY_RUN' in social
+          assert 'json.dump(public_summary' in social
+          print('PASS: no changes to private evidence or notification wiring')
+          PY
