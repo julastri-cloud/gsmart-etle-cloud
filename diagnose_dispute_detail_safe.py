@@ -54,10 +54,21 @@ DOM_PROBE = """
       videos:document.querySelectorAll("video").length
     },
     structural_ids:ids,
-    page_has_login_input:!!document.querySelector('input[type="password"]')
+    detail_sections_present:!!document.querySelector("#detailPelanggaran") && !!document.querySelector("#informasiPelanggar")
   };
 }
 """
+
+
+def detail_report_ok(result):
+    """Accept an authenticated detail page based on its expected content, not on
+    the presence of a password input that may belong to a hidden modal."""
+    probe = result.get("probe") or {}
+    return (
+        result.get("http_status") == 200
+        and result.get("on_expected_detail_path") is True
+        and probe.get("detail_sections_present") is True
+    )
 
 
 def run(detail_id):
@@ -98,7 +109,7 @@ def run(detail_id):
             del result["has_sensitive_page_content"]
             print("LAPORAN STRUKTUR (TANPA DATA PRIBADI):")
             print(json.dumps(result,ensure_ascii=False,indent=2,sort_keys=True),flush=True)
-            if result["http_status"] != 200 or not result["on_expected_detail_path"] or result["probe"]["page_has_login_input"]:
+            if not detail_report_ok(result):
                 raise RuntimeError("Detail ETLE tidak terbaca sebagai halaman yang diharapkan.")
         finally:
             browser.close()
