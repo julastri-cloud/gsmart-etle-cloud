@@ -71,7 +71,7 @@ jobs:
   sync-private-disputes:
     name: Sinkronisasi privat SIM dan bukti sanggahan (aktif + dihentikan)
     needs: full-sync
-    if: ${{ needs.full-sync.result == 'success' }}
+    if: ${{ needs['full-sync'].result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
