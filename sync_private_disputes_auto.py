@@ -29,13 +29,15 @@ def utc_time(value):
         return None
 
 
-def eligible(dispute, archive, now, missing_hours=24, full_hours=168):
+def eligible(dispute, archive, now, missing_hours=24, full_hours=168, force_missing_text=False):
     """Backfill missing cases ASAP; recheck incompletes daily and full weekly."""
     case_id=str(dispute.get("case_id") or "")
     violation_id=str(dispute.get("violation_id") or "")
     if not UUID_RE.fullmatch(case_id) or not ID_RE.fullmatch(violation_id):
         return False
     if not archive:
+        return True
+    if force_missing_text and (not archive.get("dispute_reason") or not archive.get("dispute_explanation")):
         return True
     checked=utc_time(archive.get("source_checked_at"))
     if not checked:
@@ -95,7 +97,7 @@ def list_private_state(base,key):
     return result
 
 
-def select_batch(disputes,archive,now,limit,missing_hours=24,full_hours=168):
+def select_batch(disputes,archive,now,limit,missing_hours=24,full_hours=168,force_missing_text=False):
     # No removal from etle_disputes when a case is terminated. Backfills five
     # historical stopped cases just like two active ones, anchored to case_id.
     seen=set()
@@ -104,7 +106,7 @@ def select_batch(disputes,archive,now,limit,missing_hours=24,full_hours=168):
         cid=d.get("case_id")
         if cid in seen:continue
         seen.add(cid)
-        if eligible(d,archive.get(cid),now,missing_hours,full_hours):
+        if eligible(d,archive.get(cid),now,missing_hours,full_hours,force_missing_text):
             selected.append(d)
     return selected[:limit]
 
@@ -122,7 +124,8 @@ def run():
     full_hours=max(24,min(int(os.getenv("AUTO_PRIVATE_FULL_RECHECK_HOURS","168")),2160))
     disputes=list_disputes(base,key)
     state=list_private_state(base,key)
-    pending=select_batch(disputes,state,datetime.now(timezone.utc),limit,missing_hours,full_hours)
+    force_text=os.getenv("AUTO_PRIVATE_FORCE_TEXT_BACKFILL","").strip().lower()=="true"
+    pending=select_batch(disputes,state,datetime.now(timezone.utc),limit,missing_hours,full_hours,force_text)
     counters={
         "all_historical_disputes":len(disputes),
         "previously_imported":len(state),
