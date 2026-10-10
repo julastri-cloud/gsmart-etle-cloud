@@ -60,6 +60,101 @@ DOM_PROBE = """
 """
 
 
+# Read-only media structure audit. It deliberately emits only fixed-category labels,
+# aggregate counts and load states. No raw URLs, hrefs, HTML, field values, or text.
+MEDIA_PROBE = """
+() => {
+  const regions = [
+    ["pelanggar", "#informasiPelanggar"],
+    ["identitas_pelanggar", "#identitas_pelanggar"],
+    ["dokumen_sanggahan", "#InformasiDokumenAlasan"],
+    ["overlay_dokumen", "#overlayInfoDokumen"],
+    ["alasan", "#alasanLainnya"],
+    ["kendaraan", "#informasiKendaraan"],
+    ["pelanggaran", "#detailPelanggaran"]
+  ];
+  const regionOf = el => {
+    for (const [name,selector] of regions) {
+      if(el.closest(selector)) return name;
+    }
+    return "lainnya";
+  };
+  const sourceKind = raw => {
+    const val = String(raw || "").trim();
+    if (!val) return "kosong";
+    if (/^data:/i.test(val)) return "data_inline";
+    if (/^blob:/i.test(val)) return "blob";
+    try {
+      const dest = new URL(val, document.baseURI);
+      if (!/^https?:$/i.test(dest.protocol)) return "lainnya";
+      return dest.origin === location.origin ? "asal_etle" : "asal_lain";
+    } catch (_) {
+      return "tidak_dikenali";
+    }
+  };
+  const formatKind = raw => {
+    try {
+      const path = new URL(String(raw || ""), document.baseURI).pathname.toLowerCase();
+      for(const ext of ["jpg","jpeg","png","webp","gif","svg","pdf"]) {
+        if(path.endsWith("."+ext)) return ext === "jpeg" ? "jpg" : ext;
+      }
+      return "tidak_diketahui";
+    } catch (_) {return "tidak_diketahui";}
+  };
+  const mediaLabels = element => {
+    const near = ((element.getAttribute("alt")||"")+" "+
+      (element.parentElement?.textContent||"").slice(0,220)).toLowerCase();
+    if (/\\bsim\\b|surat izin mengemudi/.test(near)) return "indikasi_sim";
+    if (/sanggah|dokumen|bukti|lampiran/.test(near)) return "indikasi_dokumen";
+    if (/kendaraan|foto etle|plat/.test(near)) return "indikasi_kendaraan";
+    return "belum_terklasifikasi";
+  };
+  const images = [...document.images].slice(0,25).map((img,i)=>{
+    const raw=img.getAttribute("src")||img.currentSrc||"";
+    return {
+      urutan:i+1,
+      area:regionOf(img),
+      label_teknis:mediaLabels(img),
+      status_muat:img.complete?(img.naturalWidth>0?"berhasil":"gagal"):"menunggu",
+      jenis_sumber:sourceKind(raw),
+      format_sumber:formatKind(raw),
+      ukuran:{lebar:img.naturalWidth||0,tinggi:img.naturalHeight||0},
+      atribut_id:img.id==="foto_bukti_frame"?"foto_bukti_frame":
+        img.id==="fullFrame"?"fullFrame":img.id?"lainnya":"tanpa_id"
+    };
+  });
+  const section = selector => {
+    const el=document.querySelector(selector);
+    if(!el) return {ada:false};
+    const photos=[...el.querySelectorAll("img")];
+    const links=[...el.querySelectorAll("a[href]")];
+    return {
+      ada:true,
+      gambar:photos.length,
+      gambar_berhasil:photos.filter(x=>x.complete&&x.naturalWidth>0).length,
+      tautan:links.length,
+      tautan_pdf:links.filter(x=>formatKind(x.getAttribute("href"))==="pdf").length,
+      jenis_sumber_tautan:[...new Set(links.map(x=>sourceKind(x.getAttribute("href"))))].sort(),
+      objek:el.querySelectorAll("object,embed,iframe").length,
+      tombol:el.querySelectorAll("button").length
+    };
+  };
+  return {
+    gambar:images,
+    total_gambar_di_halaman:document.images.length,
+    bagian:{
+      informasi_pelanggar:section("#informasiPelanggar"),
+      identitas_pelanggar:section("#identitas_pelanggar"),
+      dokumen_sanggahan:section("#InformasiDokumenAlasan"),
+      overlay_dokumen:section("#overlayInfoDokumen"),
+      foto_kendaraan:section("#foto_bukti_frame"),
+      alasan_lainnya:section("#alasanLainnya")
+    }
+  };
+}
+"""
+
+
 def detail_report_ok(result):
     """Accept an authenticated detail page based on its expected content, not on
     the presence of a password input that may belong to a hidden modal."""
@@ -111,6 +206,8 @@ def run(detail_id):
             print(json.dumps(result,ensure_ascii=False,indent=2,sort_keys=True),flush=True)
             if not detail_report_ok(result):
                 raise RuntimeError("Detail ETLE tidak terbaca sebagai halaman yang diharapkan.")
+            print("DIAGNOSTIK MEDIA (HANYA STRUKTUR, TANPA FOTO/TAUTAN/IDENTITAS):")
+            print(json.dumps(page.evaluate(MEDIA_PROBE),ensure_ascii=False,indent=2,sort_keys=True),flush=True)
         finally:
             browser.close()
 
