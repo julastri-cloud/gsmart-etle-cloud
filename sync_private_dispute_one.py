@@ -185,7 +185,7 @@ def import_case_with_page(page, base, key, violation_id, expected_case_id=None):
 
     sim_candidate=select_loaded_media(private["sim_candidates"],"sim")
     doc_candidate=select_loaded_media(private["document_candidates"],"document")
-    if not sim_candidate and not doc_candidate and not private["offender"] and not private["reason"] and not private["explanation"]:
+    if not sim_candidate and not doc_candidate and not private["offender"] and not private["reason"] and not private.get("explanation"):
         if not old:
             raise RuntimeError("NO_EVIDENCE_DATA")
 
