@@ -1,0 +1,37 @@
+name: Backfill Dihentikan After Date Window Fix
+on:
+  push:
+    branches: [main]
+    paths:
+      - backfill_terminated_once.py
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gsmart-terminated-targeted-backfill
+  cancel-in-progress: false
+jobs:
+  stopped-only-backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install ETLE dependencies
+        run: |
+          python -m pip install --disable-pip-version-check playwright supabase python-dotenv requests firebase-admin
+          python -m playwright install --with-deps chromium
+      - name: Refresh terminated state only (no push, WA or shipping)
+        env:
+          EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
+          PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          VERIFY_TERMINATED_VIOLATION_ID: '80971'
+          SYNC_MODE: incremental
+          LOOKBACK_DAYS: '14'
+          TEST_LIMIT: '0'
+          HEADLESS: 'true'
+        run: python backfill_terminated_once.py
