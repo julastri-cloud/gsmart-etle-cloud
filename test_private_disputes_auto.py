@@ -97,7 +97,7 @@ class AutoPrivateEvidenceTests(unittest.TestCase):
         self.assertIn('#InformasiDokumenAlasan',EXTRACTION_JS)
         self.assertIn('#alasanLainnya',EXTRACTION_JS)
         self.assertNotIn("terminated_cases",EXTRACTION_JS)
-        self.assertNotIn("alasan_lainnya",EXTRACTION_JS)
+        self.assertNotIn("etle_terminated_cases",EXTRACTION_JS)
         self.assertNotIn("fetch(",EXTRACTION_JS)
         self.assertNotIn("outerHTML",EXTRACTION_JS)
 
