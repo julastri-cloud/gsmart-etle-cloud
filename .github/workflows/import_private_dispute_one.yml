@@ -1,0 +1,43 @@
+name: Import Bukti Sanggahan Privat Satu Perkara
+on:
+  workflow_dispatch:
+    inputs:
+      violation_id:
+        description: "Violation ID dari detail perkara ETLE"
+        type: string
+        required: true
+        default: "80971"
+      confirm_private_import:
+        description: "Ketik YES untuk mengimpor data pribadi ke penyimpanan privat"
+        type: string
+        required: true
+        default: "NO"
+permissions:
+  contents: read
+jobs:
+  one-case-import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install limited dependencies and test
+        run: |
+          python -m pip install --disable-pip-version-check playwright requests
+          python -m py_compile sync_private_dispute_one.py extract_dispute_detail_readonly.py
+          python -m unittest -q test_private_dispute_one.py
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Import case with private credentials (no personal output)
+        env:
+          EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
+          PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          VIOLATION_ID: ${{ inputs.violation_id }}
+          SYNC_PRIVATE_CONFIRM: ${{ inputs.confirm_private_import }}
+        run: python sync_private_dispute_one.py
+# Manual one-case import only. No integration with incremental/full sync, WA/FCM.
+# Evidence bytes and personal fields are never uploaded as Actions artifacts.

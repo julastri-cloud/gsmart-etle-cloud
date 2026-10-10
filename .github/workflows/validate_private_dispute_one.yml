@@ -1,0 +1,25 @@
+name: Validate Private Dispute One-Case Import
+on:
+  pull_request:
+    paths:
+      - 'sync_private_dispute_one.py'
+      - 'test_private_dispute_one.py'
+      - '.github/workflows/import_private_dispute_one.yml'
+      - '.github/workflows/validate_private_dispute_one.yml'
+permissions:
+  contents: read
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install minimal import dependencies
+        run: python -m pip install --disable-pip-version-check requests
+      - name: Compile and validate format/path safety offline
+        run: |
+          python -m py_compile sync_private_dispute_one.py
+          python -m unittest -q test_private_dispute_one.py
