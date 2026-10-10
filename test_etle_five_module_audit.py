@@ -81,6 +81,22 @@ class HistoricalWindowAuditTests(unittest.TestCase):
 
 
 class ArchiveProtectionTests(unittest.TestCase):
+    def test_socialization_guard_also_protects_small_initial_datasets(self):
+        refs={"R"+str(i) for i in range(9)}
+        self.assertFalse(source_shipping_snapshot_is_complete([{}]*3,set(list(refs)[:3]),refs))
+        self.assertTrue(source_shipping_snapshot_is_complete([{}]*7,set(list(refs)[:7]),refs))
+
+    def test_supabase_reference_reads_do_not_truncate_at_1000_rows(self):
+        saved=[{"id":i} for i in range(1001)]
+        sb=Mock()
+        q=sb.table.return_value.select.return_value
+        q.range.return_value.execute.side_effect=[
+            Mock(data=saved[:1000]), Mock(data=saved[1000:])
+        ]
+        result=core.select_all_pages(sb,"synthetic_table","id")
+        self.assertEqual(len(result),1001)
+        self.assertEqual(q.range.call_count,2)
+
     def test_socialization_guards_source_outage_and_partial_snapshot(self):
         refs={"S"+str(i) for i in range(100)}
         self.assertFalse(source_shipping_snapshot_is_complete([],set(),refs))
