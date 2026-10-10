@@ -57,42 +57,49 @@ EXTRACTION_JS = r"""
     }
   }
   const evidence = document.querySelector("#InformasiDokumenAlasan");
-  // Use only explicitly labelled objection-reason fields. An unrelated
-  // "alasan_lainnya" field in a later TERMINATED record is NOT a dispute reason.
-  const reasonLabel = /^(alasan(?: sanggahan| keberatan| pelanggar)?|jenis sanggahan|keterangan sanggahan|alasan lainnya)$/i;
-  const normalizeReason = text => {
-    const value = clean(text);
-    if (!value || /^(-|tidak ada|pilih|pilih alasan|select|\W+)$/i.test(value)
-      || /^https?:\/\//i.test(value) || value.length>500) return "";
-    return value;
+  // Labels on ETLE Hub's "Data Sanggahan" card are EXACTLY:
+  // "Alasan Disanggah" and "Keterangan Sanggahan". Do not substitute
+  // "alasan_lainnya" from terminated-case records.
+  const reasonLabel = /^(alasan disanggah|alasan sanggahan|jenis sanggahan)$/i;
+  const explanationLabel = /^(keterangan sanggahan|keterangan disanggah)$/i;
+  const compact = text => String(text == null ? "" : text).replace(/\s+/g," ").trim();
+  const actualValue = (text,max) => {
+    const value=compact(text).replace(/^:\s*/,"").slice(0,max);
+    return /^(?:|:|-|—|tidak ada|pilih(?: alasan)?|select)$/i.test(value) ? "" : value;
   };
-  const candidates = [];
-  const explicit = document.querySelector("#alasanLainnya");
-  if(explicit){
-    candidates.push(explicit.value || (explicit.matches("input,textarea,select") ? "" : explicit.innerText));
-  }
-  for(const section of ["#InformasiDokumenAlasan","#informasiPelanggar","#detailPelanggaran"]){
-    const root=document.querySelector(section);
-    if(!root)continue;
-    for(const row of root.querySelectorAll("tr")){
-      const cells=[...row.querySelectorAll(":scope > td,:scope > th")];
-      if(cells.length>=2 && reasonLabel.test(clean(cells[0].innerText).replace(/:$/,""))){
-        candidates.push(cells.slice(1).map(el=>el.innerText).join(" ").replace(/^\s*:\s*/,""));
+  function findField(label,max){
+    // Main extraction: paired <td>/<th> cells, including split ":" cells.
+    for(const row of document.querySelectorAll("tr")){
+      const cells=[...row.children].filter(x=>x.matches("td,th"));
+      for(let i=0;i<cells.length;i++){
+        const labelText=compact(cells[i].innerText).replace(/:\s*$/,"");
+        if(!label.test(labelText))continue;
+        const candidates=cells.slice(i+1).map(x=>actualValue(x.innerText,max));
+        const value=candidates.find(Boolean);
+        if(value)return value;
       }
     }
-    for(const el of root.querySelectorAll("textarea,input,select")){
-      if(el.type==="hidden"||el.type==="password")continue;
-      const ident=clean((el.name||"")+" "+(el.id||""));
-      const associated=el.id ? root.querySelector('label[for="'+CSS.escape(el.id)+'"]') : null;
-      const label=clean(associated?.innerText || el.closest("label")?.innerText || "");
-      if(/alasan|sanggahan|keberatan/i.test(ident) || reasonLabel.test(label.replace(/:$/,""))){
-        const value=el.matches("select")?el.selectedOptions?.[0]?.textContent:
-          (el.type==="radio"||el.type==="checkbox")?(el.checked?(label||el.value):""):el.value;
-        candidates.push(value);
+    // For card layouts with div/label/spans rather than table rows.
+    for(const el of document.querySelectorAll("dt,dd,label,span,small,p,strong,b,div")){
+      const labelText=compact(el.innerText).replace(/:\s*$/,"");
+      if(!label.test(labelText))continue;
+      const options=[
+        el.nextElementSibling?.innerText,
+        el.parentElement?.nextElementSibling?.innerText,
+        el.parentElement?.children?.[1]?.innerText
+      ];
+      for(const option of options){
+        const value=actualValue(option,max);
+        if(value && !label.test(value.replace(/:\s*$/,"")))return value;
       }
     }
+    return "";
   }
-  const reason=candidates.map(normalizeReason).find(Boolean)||"";
+  const reason=findField(reasonLabel,500);
+  const explanation=findField(explanationLabel,2000);
+  // This legacy field is deliberately not used; it has previously been
+  // confused with reasons for termination (different administrative status).
+  const _legacyReasonContainer=document.querySelector("#alasanLainnya");
   const media = node => {
     if (!node) return [];
     const nodes=[...node.querySelectorAll("img[src],a[href],object[data],embed[src],iframe[src]")].slice(0,8);
@@ -109,6 +116,7 @@ EXTRACTION_JS = r"""
     detail_present:!!document.querySelector("#detailPelanggaran") && !!root,
     offender:fields,
     reason,
+    explanation,
     sim_candidates:media(root).filter(x=>x.kind==="img"),
     document_candidates:media(evidence),
     vehicle_exists:!!vehicle,
@@ -165,6 +173,7 @@ def normalize_private_extraction(raw):
         "detail_present": raw.get("detail_present") is True,
         "offender": offender,
         "reason": str(raw.get("reason") or "").strip()[:500],
+        "explanation": str(raw.get("explanation") or "").strip()[:2000],
         "sim_candidates": media(raw.get("sim_candidates")),
         "document_candidates": media(raw.get("document_candidates")),
         "vehicle_exists": raw.get("vehicle_exists") is True,
@@ -184,6 +193,7 @@ def safe_report(private):
                          "tempat_lahir", "tanggal_lahir", "ttl", "pekerjaan")
         },
         "reason_present": bool(private.get("reason")),
+        "explanation_present": bool(private.get("explanation")),
         "sim_images_accepted": len(private.get("sim_candidates") or []),
         "sim_images_loaded": sum(x.get("loaded") is True for x in (private.get("sim_candidates") or [])),
         "document_media_accepted": len(private.get("document_candidates") or []),

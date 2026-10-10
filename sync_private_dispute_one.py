@@ -166,7 +166,7 @@ def import_case_with_page(page, base, key, violation_id, expected_case_id=None):
     if expected_case_id is not None and case_id!=expected_case_id:
         raise RuntimeError("CASE_ASSOCIATION_MISMATCH")
     old_rows=db_get(base,key,"gsmart_dispute_evidence_private",{
-        "select":"case_id,offender_data,dispute_reason,sim_object_path,document_object_path",
+        "select":"case_id,offender_data,dispute_reason,dispute_explanation,sim_object_path,document_object_path",
         "case_id":"eq."+case_id, "limit":"1",
     })
     old=old_rows[0] if old_rows else {}
@@ -185,7 +185,7 @@ def import_case_with_page(page, base, key, violation_id, expected_case_id=None):
 
     sim_candidate=select_loaded_media(private["sim_candidates"],"sim")
     doc_candidate=select_loaded_media(private["document_candidates"],"document")
-    if not sim_candidate and not doc_candidate and not private["offender"] and not private["reason"]:
+    if not sim_candidate and not doc_candidate and not private["offender"] and not private["reason"] and not private.get("explanation"):
         if not old:
             raise RuntimeError("NO_EVIDENCE_DATA")
 
@@ -208,12 +208,13 @@ def import_case_with_page(page, base, key, violation_id, expected_case_id=None):
         "etle_detail_id":str(violation_id),
         "offender_data":{**(old.get("offender_data") or {}),**private["offender"]},
         "dispute_reason":private["reason"] or old.get("dispute_reason"),
+        "dispute_explanation":private["explanation"] or old.get("dispute_explanation"),
         "sim_object_path":extracted.get("sim") or old.get("sim_object_path"),
         "document_object_path":extracted.get("document") or old.get("document_object_path"),
         "source_checked_at":now,
         "updated_at":now,
     }
-    if not (record["offender_data"] or record["dispute_reason"] or
+    if not (record["offender_data"] or record["dispute_reason"] or record["dispute_explanation"] or
             record["sim_object_path"] or record["document_object_path"]):
         raise RuntimeError("NO_EVIDENCE_DATA")
     upsert_private(base,key,record)
@@ -222,6 +223,7 @@ def import_case_with_page(page, base, key, violation_id, expected_case_id=None):
         "media_errors":media_errors,
         "field_count":len(record["offender_data"]),
         "reason_present":bool(record["dispute_reason"]),
+        "explanation_present":bool(record["dispute_explanation"]),
         "sim_saved_private":bool(record["sim_object_path"]),
         "document_saved_private":bool(record["document_object_path"]),
         "source_case_link_verified":True,

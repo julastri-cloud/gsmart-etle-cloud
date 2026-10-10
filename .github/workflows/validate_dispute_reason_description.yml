@@ -1,0 +1,47 @@
+name: Validate Objection Reason and Description
+on:
+  pull_request:
+    paths:
+      - 'extract_dispute_detail_readonly.py'
+      - 'sync_private_dispute_one.py'
+      - 'sync_private_disputes_auto.py'
+      - 'test_dispute_reason_description.py'
+      - 'test_private_disputes_auto.py'
+      - 'supabase/functions/gsmart-dispute-private/**'
+      - 'supabase/migrations/20261010_dispute_reason_explanation_private.sql'
+      - '.github/workflows/private_disputes_bootstrap.yml'
+      - '.github/workflows/validate_dispute_reason_description.yml'
+permissions:
+  contents: read
+jobs:
+  offline-extraction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install offline HTTP mocking dependencies
+        run: python -m pip install --disable-pip-version-check requests
+      - name: Verify synthetic ETLE label parsing and private synchronization
+        run: |
+          python -m py_compile extract_dispute_detail_readonly.py sync_private_dispute_one.py sync_private_disputes_auto.py
+          python -m unittest -q test_dispute_reason_description.py test_private_disputes_auto.py test_private_dispute_one.py test_dispute_detail_extraction_readonly.py
+      - name: Verify no public table writes or public access paths added
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          m=Path('supabase/migrations/20261010_dispute_reason_explanation_private.sql').read_text()
+          assert 'gsmart_dispute_evidence_private' in m
+          assert 'etle_disputes' not in m.replace('public etle_disputes','')
+          assert 'ADD COLUMN IF NOT EXISTS dispute_explanation' in m
+          e=Path('supabase/functions/gsmart-dispute-private/index.ts').read_text()
+          assert 'verifyAdmin(req)' in e
+          assert 'dispute_explanation' in e
+          assert 'reason:record.dispute_reason || null' in e
+          print('PASS: reason and explanation kept Admin-only')
+          PY

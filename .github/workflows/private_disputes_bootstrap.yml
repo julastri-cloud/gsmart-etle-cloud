@@ -33,6 +33,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           AUTO_PRIVATE_MAX_CASES: '25'
+          AUTO_PRIVATE_FORCE_TEXT_BACKFILL: 'true'
           AUTO_PRIVATE_MISSING_RECHECK_HOURS: '24'
           AUTO_PRIVATE_FULL_RECHECK_HOURS: '168'
         run: python sync_private_disputes_auto.py

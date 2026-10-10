@@ -47,9 +47,24 @@ class AutoPrivateEvidenceTests(unittest.TestCase):
         }
         self.assertFalse(eligible(d,state,NOW))
         self.assertTrue(eligible(d,{**state,"source_checked_at":(NOW-timedelta(hours=25)).isoformat()},NOW))
-        full={**state,"dispute_reason":True}
+        full={**state,"dispute_reason":True,"dispute_explanation":True}
         self.assertFalse(eligible(d,{**full,"source_checked_at":(NOW-timedelta(hours=100)).isoformat()},NOW))
         self.assertTrue(eligible(d,{**full,"source_checked_at":(NOW-timedelta(hours=169)).isoformat()},NOW))
+
+    def test_force_backfill_new_text_fields_without_changing_default_cooldown(self):
+        dispute={"case_id":A,"violation_id":"80971"}
+        recent={
+            "source_checked_at":(NOW-timedelta(hours=1)).isoformat(),
+            "offender_data":True,
+            "sim_object_path":True,
+            "document_object_path":True,
+            "dispute_reason":False,
+            "dispute_explanation":False
+        }
+        self.assertFalse(eligible(dispute,recent,NOW))
+        self.assertTrue(eligible(dispute,recent,NOW,force_missing_text=True))
+        self.assertEqual(len(select_batch([dispute],{A:recent},NOW,25,force_missing_text=True)),1)
+        self.assertFalse(eligible(dispute,{**recent,"dispute_reason":True,"dispute_explanation":True},NOW,force_missing_text=True))
 
     def test_updated_private_data_keeps_existing_images_when_source_absent(self):
         fake_page=Mock()
@@ -60,12 +75,14 @@ class AutoPrivateEvidenceTests(unittest.TestCase):
           "detail_present":True,
           "offender":{"nama":"SYNTHETIC_PRIVATE_NAME"},
           "reason":"ALASAN_SANGGAHAN_UJI",
+          "explanation":"KETERANGAN_SANGGAHAN_UJI",
           "sim_candidates":[],
           "document_candidates":[],
         }
         existing=[{
             "offender_data":{"alamat":"SYNTHETIC_PRIVATE_ADDRESS"},
             "dispute_reason":None,
+            "dispute_explanation":None,
             "sim_object_path":A+"/sim/old.jpg",
             "document_object_path":A+"/document/old.png"
         }]
@@ -80,6 +97,7 @@ class AutoPrivateEvidenceTests(unittest.TestCase):
         self.assertEqual(written["sim_object_path"],A+"/sim/old.jpg")
         self.assertEqual(written["document_object_path"],A+"/document/old.png")
         self.assertEqual(written["dispute_reason"],"ALASAN_SANGGAHAN_UJI")
+        self.assertEqual(written["dispute_explanation"],"KETERANGAN_SANGGAHAN_UJI")
         self.assertNotIn("SYNTHETIC",logs.getvalue())
         self.assertNotIn("80971",logs.getvalue())
 

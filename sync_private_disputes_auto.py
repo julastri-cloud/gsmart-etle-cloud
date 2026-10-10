@@ -29,13 +29,15 @@ def utc_time(value):
         return None
 
 
-def eligible(dispute, archive, now, missing_hours=24, full_hours=168):
+def eligible(dispute, archive, now, missing_hours=24, full_hours=168, force_missing_text=False):
     """Backfill missing cases ASAP; recheck incompletes daily and full weekly."""
     case_id=str(dispute.get("case_id") or "")
     violation_id=str(dispute.get("violation_id") or "")
     if not UUID_RE.fullmatch(case_id) or not ID_RE.fullmatch(violation_id):
         return False
     if not archive:
+        return True
+    if force_missing_text and (not archive.get("dispute_reason") or not archive.get("dispute_explanation")):
         return True
     checked=utc_time(archive.get("source_checked_at"))
     if not checked:
@@ -44,7 +46,8 @@ def eligible(dispute, archive, now, missing_hours=24, full_hours=168):
     has_doc=bool(archive.get("document_object_path"))
     has_offender=bool(archive.get("offender_data"))
     has_reason=bool(archive.get("dispute_reason"))
-    is_incomplete=not (has_sim and has_doc and has_offender and has_reason)
+    has_explanation=bool(archive.get("dispute_explanation"))
+    is_incomplete=not (has_sim and has_doc and has_offender and has_reason and has_explanation)
     hours=missing_hours if is_incomplete else full_hours
     return (now-checked)>=timedelta(hours=hours)
 
@@ -73,7 +76,7 @@ def list_private_state(base,key):
     result={}
     for offset in range(0,MAX_DISCOVERY,PAGE_SIZE):
         page=db_get(base,key,"gsmart_dispute_evidence_private",{
-            "select":"case_id,sim_object_path,document_object_path,source_checked_at,dispute_reason,offender_data",
+            "select":"case_id,sim_object_path,document_object_path,source_checked_at,dispute_reason,dispute_explanation,offender_data",
             "limit":str(PAGE_SIZE),"offset":str(offset),
         })
         if not isinstance(page,list):
@@ -86,6 +89,7 @@ def list_private_state(base,key):
                     "sim_object_path":bool(row.get("sim_object_path")),
                     "document_object_path":bool(row.get("document_object_path")),
                     "dispute_reason":bool(row.get("dispute_reason")),
+                    "dispute_explanation":bool(row.get("dispute_explanation")),
                     "offender_data":bool(row.get("offender_data")),
                 }
         if len(page)<PAGE_SIZE:
@@ -93,7 +97,7 @@ def list_private_state(base,key):
     return result
 
 
-def select_batch(disputes,archive,now,limit,missing_hours=24,full_hours=168):
+def select_batch(disputes,archive,now,limit,missing_hours=24,full_hours=168,force_missing_text=False):
     # No removal from etle_disputes when a case is terminated. Backfills five
     # historical stopped cases just like two active ones, anchored to case_id.
     seen=set()
@@ -102,7 +106,7 @@ def select_batch(disputes,archive,now,limit,missing_hours=24,full_hours=168):
         cid=d.get("case_id")
         if cid in seen:continue
         seen.add(cid)
-        if eligible(d,archive.get(cid),now,missing_hours,full_hours):
+        if eligible(d,archive.get(cid),now,missing_hours,full_hours,force_missing_text):
             selected.append(d)
     return selected[:limit]
 
@@ -120,7 +124,8 @@ def run():
     full_hours=max(24,min(int(os.getenv("AUTO_PRIVATE_FULL_RECHECK_HOURS","168")),2160))
     disputes=list_disputes(base,key)
     state=list_private_state(base,key)
-    pending=select_batch(disputes,state,datetime.now(timezone.utc),limit,missing_hours,full_hours)
+    force_text=os.getenv("AUTO_PRIVATE_FORCE_TEXT_BACKFILL","").strip().lower()=="true"
+    pending=select_batch(disputes,state,datetime.now(timezone.utc),limit,missing_hours,full_hours,force_text)
     counters={
         "all_historical_disputes":len(disputes),
         "previously_imported":len(state),
@@ -131,6 +136,7 @@ def run():
         "sim_saved":0,
         "document_saved":0,
         "reason_available":0,
+        "explanation_available":0,
     }
     if pending:
         with sync_playwright() as pw:
@@ -149,6 +155,7 @@ def run():
                         counters["sim_saved"]+=int(result["sim_saved_private"])
                         counters["document_saved"]+=int(result["document_saved_private"])
                         counters["reason_available"]+=int(result["reason_present"])
+                        counters["explanation_available"]+=int(result["explanation_present"])
                     except Exception:
                         # No exception content: request errors can contain tokens,
                         # authenticated URLs or DOM/identity data.
