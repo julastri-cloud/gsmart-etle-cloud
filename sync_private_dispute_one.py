@@ -138,11 +138,100 @@ def upsert_private(base,key,record):
         raise RuntimeError("PRIVATE_METADATA_WRITE_FAILED")
 
 
+def import_case_with_page(page, base, key, violation_id, expected_case_id=None):
+    """Use an already authenticated ETLE browser for one verified dispute.
+
+    No personal data appears in the returned summary; all sensitive values
+    remain in-memory and are written only to the protected Supabase resources.
+    """
+    if not ID_RE.fullmatch(str(violation_id or "")):
+        raise ValueError("INVALID_VIOLATION_ID")
+    case_id=resolve_case(base,key,str(violation_id))
+    if expected_case_id is not None and case_id!=expected_case_id:
+        raise RuntimeError("CASE_ASSOCIATION_MISMATCH")
+    old_rows=db_get(base,key,"gsmart_dispute_evidence_private",{
+        "select":"case_id,offender_data,dispute_reason,sim_object_path,document_object_path",
+        "case_id":"eq."+case_id, "limit":"1",
+    })
+    old=old_rows[0] if old_rows else {}
+
+    response=page.goto(detail_url(violation_id),wait_until="domcontentloaded",timeout=60000)
+    page.wait_for_timeout(2100)
+    if (
+        not response or response.status!=200
+        or "/terkonfirmasi_detail.php" not in page.url
+        or "/main/" in page.url
+    ):
+        raise RuntimeError("DETAIL_NOT_AVAILABLE")
+    private=normalize_private_extraction(page.evaluate(EXTRACTION_JS))
+    if not private["detail_present"]:
+        raise RuntimeError("DETAIL_STRUCTURE_INVALID")
+
+    sim_candidate=next((x for x in private["sim_candidates"] if x["loaded"] is True),None)
+    doc_candidate=next((x for x in private["document_candidates"] if x["loaded"] is True),None)
+    if not sim_candidate and not doc_candidate and not private["offender"] and not private["reason"]:
+        if not old:
+            raise RuntimeError("NO_EVIDENCE_DATA")
+
+    media_errors=0
+    extracted={}
+    for kind,candidate in (("sim",sim_candidate),("document",doc_candidate)):
+        if candidate:
+            try:
+                data=fetch_evidence(page.context,candidate,kind)
+                extracted[kind]=upload_private(base,key,case_id,kind,data)
+            except Exception:
+                # One unavailable document must not destroy an existing saved
+                # SIM or cause other valid evidence to be dropped.
+                media_errors+=1
+
+    now=datetime.now(timezone.utc).isoformat()
+    record={
+        "case_id":case_id,
+        "violation_id":str(violation_id),
+        "etle_detail_id":str(violation_id),
+        "offender_data":{**(old.get("offender_data") or {}),**private["offender"]},
+        "dispute_reason":private["reason"] or old.get("dispute_reason"),
+        "sim_object_path":extracted.get("sim") or old.get("sim_object_path"),
+        "document_object_path":extracted.get("document") or old.get("document_object_path"),
+        "source_checked_at":now,
+        "updated_at":now,
+    }
+    if not (record["offender_data"] or record["dispute_reason"] or
+            record["sim_object_path"] or record["document_object_path"]):
+        raise RuntimeError("NO_EVIDENCE_DATA")
+    upsert_private(base,key,record)
+    return {
+        "result":"PARTIAL" if media_errors else "SUCCESS",
+        "media_errors":media_errors,
+        "field_count":len(record["offender_data"]),
+        "reason_present":bool(record["dispute_reason"]),
+        "sim_saved_private":bool(record["sim_object_path"]),
+        "document_saved_private":bool(record["document_object_path"]),
+        "source_case_link_verified":True,
+        "photo_vehicle_pipeline_changed":False,
+    }
+
+
+def etle_login(page,email,password):
+    page.goto(LOGIN_URL,wait_until="domcontentloaded",timeout=60000)
+    page.locator('input[placeholder="Email"]').fill(email,timeout=30000)
+    page.locator('input[placeholder="Password"]').fill(password,timeout=30000)
+    page.locator('button:has-text("Login")').click(timeout=30000)
+    try:
+        page.wait_for_load_state("networkidle",timeout=30000)
+    except Exception:
+        pass
+    page.wait_for_timeout(1500)
+    if "/main/" in page.url:
+        raise RuntimeError("LOGIN_FAILED")
+
+
 def run(violation_id, confirm):
     from playwright.sync_api import sync_playwright
     if not ID_RE.fullmatch(violation_id or ""):
         raise ValueError("INVALID_VIOLATION_ID")
-    if confirm != "YES":
+    if confirm!="YES":
         raise ValueError("IMPORT_REQUIRES_EXPLICIT_YES")
     base=os.getenv("SUPABASE_URL","").strip().rstrip("/")
     key=os.getenv("SUPABASE_SERVICE_ROLE_KEY","").strip()
@@ -150,67 +239,16 @@ def run(violation_id, confirm):
     passwd=os.getenv("PASSWORD_ETLE","").strip()
     if not re.fullmatch(r"https://[a-z0-9-]+\.supabase\.co",base) or not all((key,email,passwd)):
         raise RuntimeError("CONFIG_MISSING")
-    case_id=resolve_case(base,key,violation_id)
-    existing=db_get(base,key,"gsmart_dispute_evidence_private",{
-        "select":"case_id,offender_data,dispute_reason,sim_object_path,document_object_path",
-        "case_id":"eq."+case_id,"limit":"1",
-    })
-    old=existing[0] if existing else {}
-
     with sync_playwright() as pw:
         browser=pw.chromium.launch(headless=True)
         try:
             page=browser.new_page(viewport={"width":1365,"height":900})
-            page.goto(LOGIN_URL,wait_until="domcontentloaded",timeout=60000)
-            page.locator('input[placeholder="Email"]').fill(email,timeout=30000)
-            page.locator('input[placeholder="Password"]').fill(passwd,timeout=30000)
-            page.locator('button:has-text("Login")').click(timeout=30000)
-            try: page.wait_for_load_state("networkidle",timeout=30000)
-            except Exception: pass
-            page.wait_for_timeout(1500)
-            if "/main/" in page.url: raise RuntimeError("LOGIN_FAILED")
-            response=page.goto(detail_url(violation_id),wait_until="domcontentloaded",timeout=60000)
-            page.wait_for_timeout(2500)
-            if not response or response.status!=200 or "/terkonfirmasi_detail.php" not in page.url:
-                raise RuntimeError("DETAIL_NOT_FOUND")
-            private=normalize_private_extraction(page.evaluate(EXTRACTION_JS))
-            if not private["detail_present"]:
-                raise RuntimeError("DETAIL_STRUCTURE_INVALID")
-            sim_candidate=next((x for x in private["sim_candidates"] if x["loaded"] is True),None)
-            doc_candidate=next((x for x in private["document_candidates"] if x["loaded"] is True),None)
-            if not sim_candidate and not doc_candidate and not private["offender"]:
-                raise RuntimeError("NO_EVIDENCE_DATA")
-            sim_bytes=fetch_evidence(page.context,sim_candidate,"sim") if sim_candidate else None
-            doc_bytes=fetch_evidence(page.context,doc_candidate,"document") if doc_candidate else None
+            etle_login(page,email,passwd)
+            summary=import_case_with_page(page,base,key,violation_id)
         finally:
             browser.close()
-
-    # Upload only after confirmed row association with an existing dispute case.
-    sim_path=upload_private(base,key,case_id,"sim",sim_bytes) if sim_bytes else None
-    doc_path=upload_private(base,key,case_id,"document",doc_bytes) if doc_bytes else None
-    record={
-        "case_id":case_id,
-        "violation_id":violation_id,
-        "etle_detail_id":violation_id,
-        "offender_data":{**(old.get("offender_data") or {}),**private["offender"]},
-        "dispute_reason":private["reason"] or old.get("dispute_reason"),
-        "sim_object_path":sim_path or old.get("sim_object_path"),
-        "document_object_path":doc_path or old.get("document_object_path"),
-        "source_checked_at":datetime.now(timezone.utc).isoformat(),
-        "updated_at":datetime.now(timezone.utc).isoformat(),
-    }
-    upsert_private(base,key,record)
-    # No PII, URLs, object paths or even source case IDs are printed.
     print("SINKRONISASI PRIVAT SATU PERKARA:")
-    print(json.dumps({
-        "result":"SUCCESS",
-        "field_count":len(record["offender_data"]),
-        "reason_present":bool(record["dispute_reason"]),
-        "sim_saved_private":bool(record["sim_object_path"]),
-        "document_saved_private":bool(record["document_object_path"]),
-        "source_case_link_verified":True,
-        "photo_vehicle_pipeline_changed":False
-    },sort_keys=True))
+    print(json.dumps(summary,sort_keys=True))
 
 
 if __name__=="__main__":
