@@ -148,3 +148,34 @@ jobs:
           AUTO_PRIVATE_MISSING_RECHECK_HOURS: '24'
           AUTO_PRIVATE_FULL_RECHECK_HOURS: '168'
         run: python sync_private_disputes_auto.py
+
+  # Best-effort original ETLE vehicle photos for STOPPED cases, independent
+  # from the main ETLE/shipping/WA/FCM jobs and dispute SIM documents.
+  sync-stopped-vehicle-photos:
+    name: Arsip foto kendaraan perkara Dihentikan
+    needs: sync
+    if: ${{ needs.sync.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: gsmart-stopped-vehicle-photos
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install authenticated ETLE browser
+        run: |
+          python -m pip install --disable-pip-version-check playwright requests
+          python -m playwright install --with-deps chromium
+      - name: Import protected stopped-case vehicle photos
+        env:
+          EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
+          PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          STOPPED_PHOTO_MAX_CASES: '12'
+        run: python sync_stopped_vehicle_photos.py
