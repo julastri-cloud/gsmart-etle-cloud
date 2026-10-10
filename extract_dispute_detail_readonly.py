@@ -99,7 +99,9 @@ EXTRACTION_JS = r"""
     return nodes.map(el => ({
       kind:el.tagName.toLowerCase(),
       reference:el.getAttribute("src") || el.getAttribute("href") || el.getAttribute("data") || "",
-      loaded:el.tagName.toLowerCase() === "img" ? (el.complete && el.naturalWidth > 0) : null
+      loaded:el.tagName.toLowerCase() === "img" ? (el.complete && el.naturalWidth > 0) : null,
+      width:el.tagName.toLowerCase() === "img" ? el.naturalWidth : 0,
+      height:el.tagName.toLowerCase() === "img" ? el.naturalHeight : 0
     }));
   };
   const vehicle = document.querySelector("#foto_bukti_frame");
@@ -153,7 +155,8 @@ def normalize_private_extraction(raw):
                 if isinstance(fields.get(key), str) and fields[key].strip()}
     def media(items):
         return [
-            {"kind": item.get("kind"), "source": url, "loaded": item.get("loaded")}
+            {"kind": item.get("kind"), "source": url, "loaded": item.get("loaded"),
+             "width": int(item.get("width") or 0), "height": int(item.get("height") or 0)}
             for item in (items if isinstance(items,list) else [])[:MAX_MEDIA]
             if isinstance(item,dict)
             if (url := safe_etle_media_url(item.get("reference"))) is not None
