@@ -1,0 +1,19 @@
+name: Validate Dispute Extraction Prototype
+on:
+  pull_request:
+    paths:
+      - 'extract_dispute_detail_readonly.py'
+      - 'test_dispute_detail_extraction_readonly.py'
+      - '.github/workflows/dry_run_dispute_detail_extraction.yml'
+      - '.github/workflows/validate_dispute_extraction.yml'
+permissions:
+  contents: read
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest -q test_dispute_detail_extraction_readonly.py
