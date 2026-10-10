@@ -389,7 +389,7 @@ def get_case_by_ref(supabase, ref_number):
     ref_number = clean(ref_number)
     if not ref_number:
         return None
-    data = supabase.table("etle_cases").select("case_id,violation_id,ref_number,tnkb").eq("ref_number", ref_number).limit(1).execute().data
+    data = supabase.table("etle_cases").select("case_id,violation_id,ref_number,tnkb,status_etle").eq("ref_number", ref_number).limit(1).execute().data
     return data[0] if data else None
 
 
@@ -397,7 +397,7 @@ def get_case_by_violation(supabase, violation_id):
     violation_id = clean(violation_id)
     if not violation_id:
         return None
-    data = supabase.table("etle_cases").select("case_id,violation_id,ref_number,tnkb").eq("violation_id", str(violation_id)).limit(1).execute().data
+    data = supabase.table("etle_cases").select("case_id,violation_id,ref_number,tnkb,status_etle").eq("violation_id", str(violation_id)).limit(1).execute().data
     return data[0] if data else None
 
 
@@ -405,7 +405,28 @@ def update_case(supabase, case_id, row):
     row = compact_row(row)
     row["last_sync_at"] = now_iso()
     supabase.table("etle_cases").update(row).eq("case_id", case_id).execute()
-    return supabase.table("etle_cases").select("case_id,violation_id,ref_number,tnkb").eq("case_id", case_id).limit(1).execute().data[0]
+    return supabase.table("etle_cases").select("case_id,violation_id,ref_number,tnkb,status_etle").eq("case_id", case_id).limit(1).execute().data[0]
+
+
+CASE_STAGE_PRIORITY = {
+    "SURAT_DICETAK": 1,
+    "BLANKO_TERBIT": 2,
+    "TERSANGGAH": 3,
+    "DIHENTIKAN": 4,
+}
+
+
+def protect_case_lifecycle(existing_status, patch):
+    """Never overwrite a later stage with an older ETLE list source.
+
+    Preserve downstream raw_data too. Status must reflect the latest known
+    stage even when a source for an earlier stage remains available.
+    """
+    previous = CASE_STAGE_PRIORITY.get(str(existing_status or "").upper(), 0)
+    incoming = CASE_STAGE_PRIORITY.get(str(patch.get("status_etle") or "").upper(), 0)
+    if previous > incoming and incoming:
+        return {k: v for k, v in patch.items() if k not in ("status_etle", "raw_data")}
+    return patch
 
 
 def ensure_case(supabase, *, ref_number=None, violation_id=None, tnkb=None,
@@ -434,7 +455,8 @@ def ensure_case(supabase, *, ref_number=None, violation_id=None, tnkb=None,
 
     if case:
         # Jangan menimpa violation_id yang sudah terisi dengan NULL.
-        return update_case(supabase, case["case_id"], patch)
+        return update_case(supabase, case["case_id"],
+                           protect_case_lifecycle(case.get("status_etle"), patch))
 
     insert_row = compact_row(patch)
     insert_row["first_seen_at"] = now_iso()
