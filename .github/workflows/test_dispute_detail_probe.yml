@@ -1,0 +1,24 @@
+name: Validate Read-only Dispute Detail Probe
+on:
+  pull_request:
+    paths:
+      - 'diagnose_dispute_detail_safe.py'
+      - 'test_dispute_detail_safe.py'
+      - '.github/workflows/diagnose_dispute_detail_safe.yml'
+      - '.github/workflows/test_dispute_detail_probe.yml'
+permissions:
+  contents: read
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate URL restrictions, safe probe and syntax
+        run: |
+          python -m py_compile diagnose_dispute_detail_safe.py
+          python -m unittest -q test_dispute_detail_safe.py
+# Runs without ETLE credentials and does not contact the ETLE website.
