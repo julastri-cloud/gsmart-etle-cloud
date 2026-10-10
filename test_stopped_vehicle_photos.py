@@ -22,6 +22,7 @@ class StoppedVehiclePhotoTests(unittest.TestCase):
   self.assertFalse(due(full,NOW))
  def test_exact_only_loaded_violation_photo_is_selected(self):
   self.assertIn('document.querySelector("#foto_bukti_frame")',PHOTO_JS)
+  self.assertIn('frame?.querySelector("img")',PHOTO_JS)
   self.assertIn('naturalWidth>=800',PHOTO_JS)
   self.assertNotIn("document.body.innerText",PHOTO_JS)
   self.assertNotIn("outerHTML",PHOTO_JS)
