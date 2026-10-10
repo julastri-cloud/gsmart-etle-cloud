@@ -47,7 +47,7 @@ class StoppedWindowTests(unittest.TestCase):
 
     def test_other_etle_modules_and_notification_flow_are_unchanged(self):
         self.assertIn("def get_disputes(page):",self.source)
-        self.assertIn('p = {"dateFrom": f"{DATE_FROM} 00:00", "dateTo": f"{DATE_TO_NEXT} 00:00"',self.source)
+        self.assertIn('p = {"dateFrom": f"{FULL_DATE_FROM} 00:00", "dateTo": f"{DATE_TO_NEXT} 00:00"',self.source)
         self.assertIn('summaries["shipping"] = sync_shipping(page, supabase)',self.source)
         self.assertIn('summaries["terminated"] = sync_terminated(page, supabase)',self.source)
         self.assertIn('send_sync_fcm_notifications(summaries)',self.source)
