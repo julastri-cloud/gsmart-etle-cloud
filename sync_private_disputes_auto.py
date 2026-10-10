@@ -44,7 +44,8 @@ def eligible(dispute, archive, now, missing_hours=24, full_hours=168):
     has_doc=bool(archive.get("document_object_path"))
     has_offender=bool(archive.get("offender_data"))
     has_reason=bool(archive.get("dispute_reason"))
-    is_incomplete=not (has_sim and has_doc and has_offender and has_reason)
+    has_explanation=bool(archive.get("dispute_explanation"))
+    is_incomplete=not (has_sim and has_doc and has_offender and has_reason and has_explanation)
     hours=missing_hours if is_incomplete else full_hours
     return (now-checked)>=timedelta(hours=hours)
 
@@ -73,7 +74,7 @@ def list_private_state(base,key):
     result={}
     for offset in range(0,MAX_DISCOVERY,PAGE_SIZE):
         page=db_get(base,key,"gsmart_dispute_evidence_private",{
-            "select":"case_id,sim_object_path,document_object_path,source_checked_at,dispute_reason,offender_data",
+            "select":"case_id,sim_object_path,document_object_path,source_checked_at,dispute_reason,dispute_explanation,offender_data",
             "limit":str(PAGE_SIZE),"offset":str(offset),
         })
         if not isinstance(page,list):
@@ -86,6 +87,7 @@ def list_private_state(base,key):
                     "sim_object_path":bool(row.get("sim_object_path")),
                     "document_object_path":bool(row.get("document_object_path")),
                     "dispute_reason":bool(row.get("dispute_reason")),
+                    "dispute_explanation":bool(row.get("dispute_explanation")),
                     "offender_data":bool(row.get("offender_data")),
                 }
         if len(page)<PAGE_SIZE:
@@ -131,6 +133,7 @@ def run():
         "sim_saved":0,
         "document_saved":0,
         "reason_available":0,
+        "explanation_available":0,
     }
     if pending:
         with sync_playwright() as pw:
@@ -149,6 +152,7 @@ def run():
                         counters["sim_saved"]+=int(result["sim_saved_private"])
                         counters["document_saved"]+=int(result["document_saved_private"])
                         counters["reason_available"]+=int(result["reason_present"])
+                        counters["explanation_available"]+=int(result["explanation_present"])
                     except Exception:
                         # No exception content: request errors can contain tokens,
                         # authenticated URLs or DOM/identity data.
