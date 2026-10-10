@@ -1,22 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  BUCKET,GSMART_ORIGIN,isActiveAdmin,safeCaseId,safeEvidencePath,mimeForPath
+  BUCKET,GSMART_ORIGIN,canReadPrivateDispute,safeCaseId,safeEvidencePath,mimeForPath
 } from "./supabase/functions/gsmart-dispute-private/security.mjs";
 
 const id="9fe2d406-bf92-4b9e-8b0e-14e0f67320c1";
 
-test("only active ADMIN role may access private dispute evidence",()=>{
-  assert.equal(isActiveAdmin({role:"ADMIN",aktif:true}),true);
-  assert.equal(isActiveAdmin({role:" admin ",aktif:true}),true);
+test("only active ADMIN and WASATPEL roles may access private dispute evidence",()=>{
+  assert.equal(canReadPrivateDispute({role:"ADMIN",aktif:true}),true);
+  assert.equal(canReadPrivateDispute({role:" admin ",aktif:true}),true);
+  assert.equal(canReadPrivateDispute({role:"WASATPEL",aktif:true}),true);
+  assert.equal(canReadPrivateDispute({role:" wasatpel ",aktif:true}),true);
   for(const profile of [
     {role:"PETUGAS",aktif:true},
-    {role:"WASATPEL",aktif:true},
+    {role:"PETUGAS ETLE",aktif:true},
+    {role:"WASATPEL",aktif:false},
+    {role:"WASATPEL",aktif:"true"},
     {role:"ADMIN",aktif:false},
     {role:"ADMIN",aktif:"true"},
     {role:"",aktif:true},
     null
-  ])assert.equal(isActiveAdmin(profile),false);
+  ])assert.equal(canReadPrivateDispute(profile),false);
 });
 test("case IDs must be UUIDs, not client-supplied filter expressions",()=>{
   assert.equal(safeCaseId(id),id);
