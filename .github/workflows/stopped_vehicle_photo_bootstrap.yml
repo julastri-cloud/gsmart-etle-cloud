@@ -30,4 +30,5 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           STOPPED_PHOTO_MAX_CASES: '25'
+          STOPPED_PHOTO_FORCE: 'true'
         run: python sync_stopped_vehicle_photos.py
