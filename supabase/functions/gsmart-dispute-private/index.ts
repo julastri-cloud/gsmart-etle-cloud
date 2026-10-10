@@ -1,9 +1,9 @@
 // G-Smart private dispute evidence API.
-// Firebase Auth is verified by Google Identity Toolkit, then Firestore ADMIN
-// active profile is checked independently from the client-side UI.
+// Firebase Auth is verified by Google Identity Toolkit. Then Firestore role
+// (active ADMIN or WASATPEL) is checked independently of client-side UI.
 // Gateway verify_jwt=false is required because this API authenticates Firebase
 // ID tokens (not Supabase JWTs) inside the function.
-import { BUCKET, GSMART_ORIGIN, safeCaseId, safeEvidencePath, mimeForPath, isActiveAdmin } from "./security.mjs";
+import { BUCKET, GSMART_ORIGIN, safeCaseId, safeEvidencePath, mimeForPath, canReadPrivateDispute } from "./security.mjs";
 
 const FIREBASE_API_KEY = "AIzaSyBbF1MPzFK_EdUFV9CNh2ZZfuHxRgilm6o"; // Public Firebase web key
 const FIREBASE_PROJECT_ID = "g-smart-guyangan";
@@ -27,7 +27,7 @@ function fv(doc: any, key:string) {
   if(v&&"booleanValue" in v)return v.booleanValue;
   return null;
 }
-async function verifyAdmin(req: Request) {
+async function verifyAuthorizedReader(req: Request) {
   const header=req.headers.get("Authorization") || "";
   const token=/^Bearer\s+(\S+)$/i.exec(header)?.[1];
   if(!token || token.length>8192)throw new Error("UNAUTHORIZED");
@@ -50,7 +50,7 @@ async function verifyAdmin(req: Request) {
   );
   if(!p.ok)throw new Error("FORBIDDEN");
   const doc=await p.json();
-  if(!isActiveAdmin({role:fv(doc,"role"),aktif:fv(doc,"aktif")}))throw new Error("FORBIDDEN");
+  if(!canReadPrivateDispute({role:fv(doc,"role"),aktif:fv(doc,"aktif")}))throw new Error("FORBIDDEN");
   return user.localId;
 }
 function serviceConfig() {
@@ -104,7 +104,7 @@ Deno.serve(async (req:Request) => {
   if(req.method==="OPTIONS")return new Response("ok",{status:200,headers:cors});
   if(req.method!=="POST")return answer({error:"METHOD_NOT_ALLOWED"},405);
   try {
-    await verifyAdmin(req);
+    await verifyAuthorizedReader(req);
     const body=await req.json().catch(()=>({}));
     const caseId=safeCaseId(body?.case_id);
     if(!caseId)return answer({error:"INVALID_CASE"},400);
