@@ -40,8 +40,8 @@ jobs:
           assert 'etle_disputes' not in m.replace('public etle_disputes','')
           assert 'ADD COLUMN IF NOT EXISTS dispute_explanation' in m
           e=Path('supabase/functions/gsmart-dispute-private/index.ts').read_text()
-          assert 'verifyAdmin(req)' in e
+          assert 'verifyAuthorizedReader(req)' in e
           assert 'dispute_explanation' in e
           assert 'reason:record.dispute_reason || null' in e
-          print('PASS: reason and explanation kept Admin-only')
+          print('PASS: reason and explanation protected for active Admin and Wasatpel')
           PY

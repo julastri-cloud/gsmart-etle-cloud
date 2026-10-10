@@ -4,8 +4,9 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]
 export function normalizeRole(value) {
   return String(value ?? "").trim().toUpperCase();
 }
-export function isActiveAdmin(profile) {
-  return profile?.aktif === true && normalizeRole(profile?.role) === "ADMIN";
+export function canReadPrivateDispute(profile) {
+  const role = normalizeRole(profile?.role);
+  return profile?.aktif === true && (role === "ADMIN" || role === "WASATPEL");
 }
 export function safeCaseId(value) {
   return typeof value === "string" && UUID_RE.test(value.trim()) ? value.trim().toLowerCase() : null;
