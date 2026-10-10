@@ -10,14 +10,12 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import quote, urlsplit
 
 import requests
-from playwright.sync_api import sync_playwright
-
 from diagnose_dispute_detail_safe import LOGIN_URL, detail_url
 from extract_dispute_detail_readonly import (
-    EXTRACTION_JS, normalize_private_extraction, safe_report,
+    EXTRACTION_JS, normalize_private_extraction,
 )
 
 BUCKET = "gsmart-dispute-private"
@@ -92,6 +90,12 @@ def fetch_evidence(context, candidate, kind):
     response=context.request.get(url,timeout=30000,fail_on_status_code=False)
     if response.status != 200:
         raise RuntimeError("EVIDENCE_HTTP_FAILED")
+    try:
+        reported_size=int(response.headers.get("content-length","0"))
+    except (TypeError,ValueError):
+        reported_size=0
+    if reported_size>MAX_BYTES:
+        raise RuntimeError("EVIDENCE_SIZE_INVALID")
     data=response.body()
     if not data or len(data)>MAX_BYTES:
         raise RuntimeError("EVIDENCE_SIZE_INVALID")
@@ -135,6 +139,7 @@ def upsert_private(base,key,record):
 
 
 def run(violation_id, confirm):
+    from playwright.sync_api import sync_playwright
     if not ID_RE.fullmatch(violation_id or ""):
         raise ValueError("INVALID_VIOLATION_ID")
     if confirm != "YES":
