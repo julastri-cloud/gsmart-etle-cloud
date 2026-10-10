@@ -7,7 +7,7 @@ from datetime import datetime,timezone,timedelta
 from unittest.mock import Mock, patch
 
 from extract_dispute_detail_readonly import EXTRACTION_JS
-from sync_private_dispute_one import import_case_with_page
+from sync_private_dispute_one import import_case_with_page, select_loaded_media
 from sync_private_disputes_auto import eligible, select_batch, utc_time
 
 A="9fe2d406-bf92-4b9e-8b0e-14e0f67320c1"
@@ -82,6 +82,20 @@ class AutoPrivateEvidenceTests(unittest.TestCase):
         self.assertEqual(written["dispute_reason"],"ALASAN_SANGGAHAN_UJI")
         self.assertNotIn("SYNTHETIC",logs.getvalue())
         self.assertNotIn("80971",logs.getvalue())
+
+    def test_source_images_must_be_large_enough_to_be_evidence(self):
+        self.assertIsNone(select_loaded_media([
+            {"kind":"img","loaded":True,"width":150,"height":150,"source":"https://etle.test/logo.png"}
+        ],"sim"))
+        self.assertIsNone(select_loaded_media([
+            {"kind":"img","loaded":False,"width":900,"height":1600,"source":"https://etle.test/missing.jpg"}
+        ],"sim"))
+        self.assertEqual(select_loaded_media([
+            {"kind":"img","loaded":True,"width":900,"height":1600,"source":"https://etle.test/sim.jpg"}
+        ],"sim")["width"],900)
+        self.assertEqual(select_loaded_media([
+            {"kind":"img","loaded":True,"width":745,"height":326,"source":"https://etle.test/doc.png"}
+        ],"document")["width"],745)
 
     def test_reject_mismatched_case_association_before_reading_evidence(self):
         page=Mock()
