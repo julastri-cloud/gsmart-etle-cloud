@@ -587,7 +587,7 @@ def reconcile_shipping_archives(supabase, seen_refs):
                   if clean(x.get("ref_number"))}
     if saved_refs:
         overlap = len(saved_refs & seen_refs)
-        min_overlap = max(5, int(len(saved_refs) * 0.7)) if len(saved_refs) >= 10 else 1
+        min_overlap = max(1, (len(saved_refs) * 7 + 9) // 10)
         if overlap < min_overlap:
             log("::warning::Shipping archive reconciliation skipped: source snapshot incomplete")
             return {"checked": 0, "missing": 0, "archived": 0,
