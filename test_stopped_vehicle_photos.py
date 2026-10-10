@@ -43,6 +43,8 @@ class StoppedVehiclePhotoTests(unittest.TestCase):
        patch("sync_stopped_vehicle_photos.fetch_photo_bytes") as download:
    self.assertTrue(sync_one(page,"https://demo.supabase.co","key",row,old))
    save.assert_called_once_with("https://demo.supabase.co","key",CID,None,old)
+   page.wait_for_load_state.assert_called_once_with("networkidle",timeout=18000)
+   page.wait_for_function.assert_called_once()
    download.assert_not_called()
 
 if __name__=="__main__":unittest.main()
