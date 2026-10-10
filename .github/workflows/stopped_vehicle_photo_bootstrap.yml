@@ -1,0 +1,33 @@
+name: Initial Archive Foto Kendaraan Dihentikan
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sync_stopped_vehicle_photos.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gsmart-stopped-vehicle-photos
+  cancel-in-progress: false
+jobs:
+  initial-stopped-photo-archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Playwright
+        run: |
+          python -m pip install --disable-pip-version-check playwright requests
+          python -m playwright install --with-deps chromium
+      - name: Archive original ETLE photos for stopped cases
+        env:
+          EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
+          PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          STOPPED_PHOTO_MAX_CASES: '25'
+        run: python sync_stopped_vehicle_photos.py
