@@ -1,0 +1,41 @@
+name: Validate ETLE Dihentikan Full-History Incremental
+on:
+  pull_request:
+    paths:
+      - 'sync_etle.py'
+      - 'test_terminated_full_history_window.py'
+      - 'backfill_terminated_once.py'
+      - '.github/workflows/backfill_terminated_date_fix.yml'
+      - '.github/workflows/validate_terminated_full_history_window.yml'
+permissions:
+  contents: read
+jobs:
+  offline-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check syntax and full historical terminated window
+        run: |
+          python -m py_compile sync_etle.py backfill_terminated_once.py
+          python -m unittest -q test_terminated_full_history_window.py
+      - name: Ensure targeted backfill never invokes the whole ETLE sync
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast
+          code=Path('backfill_terminated_once.py').read_text()
+          tree=ast.parse(code)
+          imports=set()
+          for n in ast.walk(tree):
+              if isinstance(n,ast.ImportFrom) and n.module=='sync_etle':
+                  imports.update(x.name for x in n.names)
+          assert {'sync_terminated','login_etle','open_blanko_page','create_supabase'}<=imports
+          assert not imports.intersection({'main','sync_shipping','sync_disputes','sync_blanko',
+                                            'send_sync_fcm_notifications','send_sync_wa_notification'})
+          assert 'redirect_stdout' in code
+          print('PASS: stopped-only backfill with protected logs')
+          PY
