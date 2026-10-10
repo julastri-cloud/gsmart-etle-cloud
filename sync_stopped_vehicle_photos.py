@@ -136,9 +136,22 @@ def sync_one(page,base,key,record,old=None):
     if not source_id:
         raise RuntimeError("SOURCE_ID_UNAVAILABLE")
     resp=page.goto(build_detail_url(source_id),wait_until="domcontentloaded",timeout=60000)
-    page.wait_for_timeout(2000)
     if not resp or resp.status!=200 or "/dihentikan_detail.php" not in page.url or "/main/" in page.url:
         raise RuntimeError("STOPPED_DETAIL_UNAVAILABLE")
+    # Same waiting behavior as the diagnostic where the 2048x1600 image loaded.
+    # ETLE fills #foto_bukti_frame asynchronously after DOMContentLoaded.
+    try:
+        page.wait_for_load_state("networkidle", timeout=18000)
+    except Exception:
+        pass
+    try:
+        page.wait_for_function("""() => {
+            const el=document.querySelector("#foto_bukti_frame");
+            const img=el?.tagName==="IMG"?el:el?.querySelector("img");
+            return !!(img&&img.complete&&img.naturalWidth>=800&&img.naturalHeight>=500);
+        }""",timeout=14000)
+    except Exception:
+        pass
     photo=page.evaluate(PHOTO_JS)
     if not page.locator("#detailPelanggaran").count():
         raise RuntimeError("DETAIL_STRUCTURE_MISSING")
