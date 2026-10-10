@@ -36,11 +36,8 @@ def verify_daya_angkut_confirmations(page, supabase):
     }
 
     from_date = core.ddmmyyyy_to_iso(core.DATE_FROM)
-    shipping_rows = (
-        supabase.table("etle_shipping")
-        .select("case_id,ref_number,printed_date")
-        .execute()
-        .data
+    shipping_rows = core.select_all_pages(
+        supabase, "etle_shipping", "case_id,ref_number,printed_date"
     )
     shipping_rows = [
         row for row in shipping_rows
@@ -59,14 +56,11 @@ def verify_daya_angkut_confirmations(page, supabase):
 
     downstream = set()
     for table in ("etle_disputes", "etle_terminated_cases", "etle_court_info"):
-        data = supabase.table(table).select("case_id").execute().data
+        data = core.select_all_pages(supabase, table, "case_id")
         downstream.update(row.get("case_id") for row in data if row.get("case_id"))
 
-    blanko_rows = (
-        supabase.table("etle_cases")
-        .select("case_id,no_blanko")
-        .execute()
-        .data
+    blanko_rows = core.select_all_pages(
+        supabase, "etle_cases", "case_id,no_blanko"
     )
     downstream.update(
         row.get("case_id")
@@ -74,14 +68,10 @@ def verify_daya_angkut_confirmations(page, supabase):
         if row.get("case_id") and core.clean(row.get("no_blanko"))
     )
 
-    cases = (
-        supabase.table("etle_cases")
-        .select(
-            "case_id,ref_number,tnkb,jenis_pelanggaran,status_etle,is_archived,"
-            "missing_full_sync_count,source_missing_since,archived_at"
-        )
-        .execute()
-        .data
+    cases = core.select_all_pages(
+        supabase, "etle_cases",
+        "case_id,ref_number,tnkb,jenis_pelanggaran,status_etle,is_archived,"
+        "missing_full_sync_count,source_missing_since,archived_at"
     )
     case_by_id = {row["case_id"]: row for row in cases if row.get("case_id")}
     case_by_ref = {
