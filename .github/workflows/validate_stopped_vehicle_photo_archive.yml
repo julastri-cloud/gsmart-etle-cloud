@@ -1,0 +1,46 @@
+name: Validate Stopped Vehicle Photo Archive
+on:
+  pull_request:
+    paths:
+      - 'sync_stopped_vehicle_photos.py'
+      - 'test_stopped_vehicle_photos.py'
+      - 'supabase/functions/gsmart-stopped-vehicle/**'
+      - 'supabase/migrations/20261010_gsmart_stopped_vehicle_private.sql'
+      - '.github/workflows/sync_supabase.yml'
+      - '.github/workflows/full_sync_weekly.yml'
+      - '.github/workflows/stopped_vehicle_photo_bootstrap.yml'
+      - '.github/workflows/validate_stopped_vehicle_photo_archive.yml'
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install offline Python testing dependencies
+        run: python -m pip install --disable-pip-version-check requests PyYAML
+      - name: Python syntax and stopped photo safeguards
+        run: |
+          python -m py_compile sync_stopped_vehicle_photos.py
+          python -m unittest -q test_stopped_vehicle_photos.py
+      - name: Validate Firebase roles and case path rules
+        run: node --test test_stopped_vehicle_security.mjs
+      - name: Verify original ETLE jobs unchanged
+        run: |
+          python - <<'PY'
+          import yaml
+          from pathlib import Path
+          for fn,main in [('sync_supabase.yml','sync'),('full_sync_weekly.yml','full-sync')]:
+              jobs=yaml.safe_load((Path('.github/workflows')/fn).read_text())['jobs']
+              assert jobs['sync-stopped-vehicle-photos']['needs']==main
+              assert jobs['sync-stopped-vehicle-photos']['steps'][-1]['run']=='python sync_stopped_vehicle_photos.py'
+              assert jobs[main]['steps'][-1]['run'].strip()=='python sync_etle.py'
+          print('PASS: stopped photo job isolated')
+          PY
