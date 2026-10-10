@@ -19,6 +19,13 @@ def log(message):
     print(message, flush=True)
 
 
+def source_shipping_snapshot_is_complete(rows, seen_refs, historical_refs):
+    if not rows:
+        return False
+    min_overlap = max(1, (len(historical_refs) * 7 + 9) // 10)
+    return not historical_refs or len(seen_refs & historical_refs) >= min_overlap
+
+
 def verify_daya_angkut_confirmations(page, supabase):
     # Hanya membaca daftar Pengiriman Surat. Tidak membuka printed_detail.
     rows = core.get_printed_list(page)
@@ -29,11 +36,8 @@ def verify_daya_angkut_confirmations(page, supabase):
     }
 
     from_date = core.ddmmyyyy_to_iso(core.DATE_FROM)
-    shipping_rows = (
-        supabase.table("etle_shipping")
-        .select("case_id,ref_number,printed_date")
-        .execute()
-        .data
+    shipping_rows = core.select_all_pages(
+        supabase, "etle_shipping", "case_id,ref_number,printed_date"
     )
     shipping_rows = [
         row for row in shipping_rows
@@ -42,16 +46,21 @@ def verify_daya_angkut_confirmations(page, supabase):
         and (not row.get("printed_date") or str(row.get("printed_date")) >= from_date)
     ]
 
+    # Safety: absence can only be interpreted when the historical ETLE source
+    # returns a sufficiently complete, plausible snapshot. A truncated/empty
+    # DataTables response is NOT an official transport confirmation.
+    historical_refs = {core.clean(x.get("ref_number")) for x in shipping_rows
+                       if core.clean(x.get("ref_number"))}
+    if not source_shipping_snapshot_is_complete(rows, seen_refs, historical_refs):
+        raise RuntimeError("SOURCE_SHIPPING_SNAPSHOT_INCOMPLETE")
+
     downstream = set()
     for table in ("etle_disputes", "etle_terminated_cases", "etle_court_info"):
-        data = supabase.table(table).select("case_id").execute().data
+        data = core.select_all_pages(supabase, table, "case_id")
         downstream.update(row.get("case_id") for row in data if row.get("case_id"))
 
-    blanko_rows = (
-        supabase.table("etle_cases")
-        .select("case_id,no_blanko")
-        .execute()
-        .data
+    blanko_rows = core.select_all_pages(
+        supabase, "etle_cases", "case_id,no_blanko"
     )
     downstream.update(
         row.get("case_id")
@@ -59,14 +68,10 @@ def verify_daya_angkut_confirmations(page, supabase):
         if row.get("case_id") and core.clean(row.get("no_blanko"))
     )
 
-    cases = (
-        supabase.table("etle_cases")
-        .select(
-            "case_id,ref_number,tnkb,jenis_pelanggaran,status_etle,is_archived,"
-            "missing_full_sync_count,source_missing_since,archived_at"
-        )
-        .execute()
-        .data
+    cases = core.select_all_pages(
+        supabase, "etle_cases",
+        "case_id,ref_number,tnkb,jenis_pelanggaran,status_etle,is_archived,"
+        "missing_full_sync_count,source_missing_since,archived_at"
     )
     case_by_id = {row["case_id"]: row for row in cases if row.get("case_id")}
     case_by_ref = {
@@ -217,10 +222,16 @@ def main():
     log("=" * 72)
     log("G-SMART KONFIRMASI DAYA ANGKUT SOSIALISASI SELESAI")
     log("=" * 72)
-    log(json.dumps(result, ensure_ascii=False, indent=2))
+    # Do not expose TNKB, ETLE reference numbers or personal case metadata
+    # in GitHub Actions logs and downloadable artifacts.
+    public_summary = {
+        key: (len(value) if isinstance(value, list) else value)
+        for key, value in result.items()
+    }
+    log(json.dumps(public_summary, ensure_ascii=False, indent=2))
 
     with open("daya_angkut_sosialisasi_result.json", "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+        json.dump(public_summary, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":

@@ -187,6 +187,21 @@ def upsert(supabase, table, row, conflict):
     return supabase.table(table).upsert(row, on_conflict=conflict).execute().data
 
 
+def select_all_pages(supabase, table, fields, page_size=1000, max_rows=10000):
+    """Do not silently truncate table reads at PostgREST's default 1000 rows."""
+    rows = []
+    for offset in range(0, max_rows, page_size):
+        batch = supabase.table(table).select(fields).range(
+            offset, offset + page_size - 1
+        ).execute().data
+        if not isinstance(batch, list):
+            raise RuntimeError("SUPABASE_PAGINATION_INVALID")
+        rows.extend(batch)
+        if len(batch) < page_size:
+            return rows
+    raise RuntimeError("SUPABASE_PAGINATION_LIMIT")
+
+
 def update_sync_state(supabase, module, status="SUCCESS"):
     upsert(supabase, "gsmart_sync_state", {
         "module": module,
@@ -389,7 +404,7 @@ def get_case_by_ref(supabase, ref_number):
     ref_number = clean(ref_number)
     if not ref_number:
         return None
-    data = supabase.table("etle_cases").select("case_id,violation_id,ref_number,tnkb").eq("ref_number", ref_number).limit(1).execute().data
+    data = supabase.table("etle_cases").select("case_id,violation_id,ref_number,tnkb,status_etle").eq("ref_number", ref_number).limit(1).execute().data
     return data[0] if data else None
 
 
@@ -397,7 +412,7 @@ def get_case_by_violation(supabase, violation_id):
     violation_id = clean(violation_id)
     if not violation_id:
         return None
-    data = supabase.table("etle_cases").select("case_id,violation_id,ref_number,tnkb").eq("violation_id", str(violation_id)).limit(1).execute().data
+    data = supabase.table("etle_cases").select("case_id,violation_id,ref_number,tnkb,status_etle").eq("violation_id", str(violation_id)).limit(1).execute().data
     return data[0] if data else None
 
 
@@ -405,7 +420,28 @@ def update_case(supabase, case_id, row):
     row = compact_row(row)
     row["last_sync_at"] = now_iso()
     supabase.table("etle_cases").update(row).eq("case_id", case_id).execute()
-    return supabase.table("etle_cases").select("case_id,violation_id,ref_number,tnkb").eq("case_id", case_id).limit(1).execute().data[0]
+    return supabase.table("etle_cases").select("case_id,violation_id,ref_number,tnkb,status_etle").eq("case_id", case_id).limit(1).execute().data[0]
+
+
+CASE_STAGE_PRIORITY = {
+    "SURAT_DICETAK": 1,
+    "BLANKO_TERBIT": 2,
+    "TERSANGGAH": 3,
+    "DIHENTIKAN": 4,
+}
+
+
+def protect_case_lifecycle(existing_status, patch):
+    """Never overwrite a later stage with an older ETLE list source.
+
+    Preserve downstream raw_data too. Status must reflect the latest known
+    stage even when a source for an earlier stage remains available.
+    """
+    previous = CASE_STAGE_PRIORITY.get(str(existing_status or "").upper(), 0)
+    incoming = CASE_STAGE_PRIORITY.get(str(patch.get("status_etle") or "").upper(), 0)
+    if previous > incoming and incoming:
+        return {k: v for k, v in patch.items() if k not in ("status_etle", "raw_data")}
+    return patch
 
 
 def ensure_case(supabase, *, ref_number=None, violation_id=None, tnkb=None,
@@ -434,7 +470,8 @@ def ensure_case(supabase, *, ref_number=None, violation_id=None, tnkb=None,
 
     if case:
         # Jangan menimpa violation_id yang sudah terisi dengan NULL.
-        return update_case(supabase, case["case_id"], patch)
+        return update_case(supabase, case["case_id"],
+                           protect_case_lifecycle(case.get("status_etle"), patch))
 
     insert_row = compact_row(patch)
     insert_row["first_seen_at"] = now_iso()
@@ -522,11 +559,8 @@ def reconcile_shipping_archives(supabase, seen_refs):
     if SYNC_MODE != "full":
         return {"checked": 0, "missing": 0, "archived": 0}
 
-    shipping_rows = (
-        supabase.table("etle_shipping")
-        .select("case_id,ref_number,printed_date")
-        .execute()
-        .data
+    shipping_rows = select_all_pages(
+        supabase, "etle_shipping", "case_id,ref_number,printed_date"
     )
     from_date = ddmmyyyy_to_iso(DATE_FROM)
     shipping_rows = [
@@ -537,19 +571,27 @@ def reconcile_shipping_archives(supabase, seen_refs):
 
     downstream = set()
     for table in ("etle_disputes", "etle_terminated_cases", "etle_court_info"):
-        rows = supabase.table(table).select("case_id").execute().data
+        rows = select_all_pages(supabase, table, "case_id")
         downstream.update(x.get("case_id") for x in rows if x.get("case_id"))
-    blanko_rows = (
-        supabase.table("etle_cases")
-        .select("case_id,no_blanko")
-        .execute()
-        .data
-    )
+    blanko_rows = select_all_pages(supabase, "etle_cases", "case_id,no_blanko")
     downstream.update(x.get("case_id") for x in blanko_rows if x.get("case_id") and clean(x.get("no_blanko")))
 
     by_case = {}
     for row in shipping_rows:
         by_case[row["case_id"]] = row
+
+    # Full archive decisions are unsafe when an ETLE source page is empty
+    # or massively truncated. A short/incomplete response must not count
+    # toward two consecutive missing-full-sync confirmations.
+    saved_refs = {clean(x.get("ref_number")) for x in shipping_rows
+                  if clean(x.get("ref_number"))}
+    if saved_refs:
+        overlap = len(saved_refs & seen_refs)
+        min_overlap = max(1, (len(saved_refs) * 7 + 9) // 10)
+        if overlap < min_overlap:
+            log("::warning::Shipping archive reconciliation skipped: source snapshot incomplete")
+            return {"checked": 0, "missing": 0, "archived": 0,
+                    "downstream_cleared": 0, "skipped": "source_snapshot_incomplete"}
 
     checked = missing = archived = downstream_cleared = 0
     for case_id, row in by_case.items():
@@ -669,7 +711,11 @@ def get_printed_list(page):
             raise RuntimeError("JSON Surat Dicetak tidak dikenali")
         rows.extend(batch)
         log(f"Shipping API: {len(rows)}/{total}")
-        if not batch or len(rows) >= total:
+        if not batch:
+            if len(rows) < total:
+                raise RuntimeError("Shipping API pagination stopped before recordsFiltered")
+            break
+        if len(rows) >= total:
             break
         start += len(batch)
         draw += 1
@@ -1022,10 +1068,132 @@ def sync_shipping(page, supabase):
         write_sync_log(supabase, "SHIPPING", started, "FAILED", found, ok, failed, str(exc)); raise
 
 # ============================================================
+# INCREMENTAL SHIPPING: LIGHTWEIGHT HISTORICAL STATUS REFRESH
+# ============================================================
+def plan_historical_shipping_updates(source_rows, saved_rows, cutoff):
+    """Pure plan: old printed rows only; never clear valid fields with blanks."""
+    saved = {str(row.get("source_id")): row for row in saved_rows
+             if row.get("source_id") is not None}
+    changes = []
+    historical_seen = set()
+    unknown_historical = 0
+    for item in source_rows:
+        source_id = str(item.get("id") or "")
+        if not source_id or source_id in historical_seen:
+            continue
+        old = saved.get(source_id)
+        if not old:
+            # A record published late with a historical printed date requires
+            # full detail ingestion. Warn rather than make up case associations.
+            unknown_historical += 1
+            continue
+        if old.get("printed_date") and str(old["printed_date"]) >= cutoff:
+            continue
+        historical_seen.add(source_id)
+        patch = {}
+        for field, value in (
+            ("status", clean(item.get("status"))),
+            ("status_description", clean(item.get("desc_terakhir"))),
+            ("tracking_number", clean(item.get("no_resi"))),
+        ):
+            if value and str(old.get(field) or "").strip() != value:
+                patch[field] = value
+        if patch:
+            changes.append((source_id, old, item, patch))
+    return changes, len(historical_seen), unknown_historical
+
+
+def sync_shipping_historical_statuses(page, supabase):
+    """Read history with inexpensive source paging, update only changed shipping rows.
+
+    New historical records are NOT imported here (full-sync handles detailed
+    source/case linkage); no photo or BLUE lookups are made.
+    """
+    if SYNC_MODE != "incremental":
+        return {"checked": 0, "updated": 0, "status_events": 0, "unknown_source_ids": 0,
+                "new_items": []}
+    started = now_iso()
+    global DATE_FROM
+    original_start = DATE_FROM
+    try:
+        DATE_FROM = FULL_DATE_FROM
+        try:
+            source = get_printed_list(page)
+        finally:
+            DATE_FROM = original_start
+        saved = []
+        for offset in range(0, 10000, 1000):
+            batch = supabase.table("etle_shipping").select(
+                "source_id,case_id,ref_number,tnkb,status,status_description,"
+                "tracking_number,printed_date"
+            ).range(offset, offset + 999).execute().data
+            saved.extend(batch)
+            if len(batch) < 1000:
+                break
+        else:
+            raise RuntimeError("SHIPPING_HISTORY_DB_PAGE_LIMIT")
+        # Incomplete source snapshots must not change historical statuses.
+        if len(saved) >= 30 and len(source) < max(1, int(len(saved) * 0.7)):
+            raise RuntimeError("SHIPPING_HISTORY_SOURCE_COVERAGE_LOW")
+        if not source and saved:
+            raise RuntimeError("SHIPPING_HISTORY_SOURCE_EMPTY")
+        cutoff = ddmmyyyy_to_iso(original_start)
+        changes, checked, unknown = plan_historical_shipping_updates(source, saved, cutoff)
+        if len(changes) > max(20, int(max(checked, 1) * 0.2)):
+            raise RuntimeError("SHIPPING_HISTORY_BULK_CHANGE_UNEXPECTED")
+        notifications = []
+        baseline_ready = sync_baseline_exists(supabase, SHIPPING_FCM_BASELINE_MODULE)
+        for source_id, old, item, patch in changes:
+            new_status = patch.get("status") or old.get("status")
+            if "tracking_number" in patch:
+                patch["courier"] = "JNE"
+            if normalize_shipping_status(new_status) == "terkirim":
+                delivered = extract_delivery_datetime(item.get("desc_terakhir"))
+                if delivered:
+                    patch["delivered_at"] = delivered
+                    patch["last_event_at"] = delivered
+            patch["updated_at"] = now_iso()
+            supabase.table("etle_shipping").update(patch).eq("source_id", source_id).execute()
+            if patch.get("delivered_at") and old.get("case_id"):
+                add_history_event(
+                    supabase, old["case_id"], "LETTER_DELIVERED",
+                    patch["delivered_at"], "Surat diterima",
+                    patch.get("status_description") or old.get("status_description"),
+                    "ETLE_SHIPPING"
+                )
+            if "status" in patch and old.get("case_id"):
+                notification = select_shipping_notification(
+                    [old], {"status": new_status, "tracking_number":patch.get("tracking_number")
+                            or old.get("tracking_number")}, baseline_ready, SYNC_MODE
+                )
+                if notification:
+                    notifications.append({
+                        "event_type": notification,
+                        "case_id": old["case_id"],
+                        "ref_number": old.get("ref_number"),
+                        "tnkb": old.get("tnkb")
+                    })
+        write_sync_log(supabase, "SHIPPING_HISTORICAL", started,
+                       "SUCCESS", len(source), len(changes), 0)
+        if unknown:
+            print(f"::warning::Shipping historical: {unknown} unknown source records; full-sync required for new case/photo details.")
+        return {"checked": checked, "updated": len(changes),
+                "status_events": len(notifications), "unknown_source_ids": unknown,
+                "new_items": notifications}
+    except Exception as error:
+        write_sync_log(supabase, "SHIPPING_HISTORICAL", started,
+                       "FAILED", 0, 0, 1, type(error).__name__)
+        raise
+
+
+# ============================================================
 # BLANKO + DETAIL
 # ============================================================
 def get_blanko_list(page):
-    url = f"{URL_LIST_BLANKO}?dateFrom={DATE_FROM}&dateTo={DATE_TO}&status=&_={int(time.time()*1000)}"
+    # ETLE date filters refer to source-period rows, not necessarily when a
+    # previously issued blanko changes payment/court state. Read history
+    # from the G-Smart baseline, even on incremental runs.
+    url = f"{URL_LIST_BLANKO}?dateFrom={FULL_DATE_FROM}&dateTo={DATE_TO_NEXT}&status=&_={int(time.time()*1000)}"
     parsed = browser_fetch(page, url)
     if isinstance(parsed, list):
         rows = parsed
@@ -1294,7 +1462,9 @@ def sync_blanko(page, supabase):
 # DISPUTES
 # ============================================================
 def get_disputes(page):
-    p = {"dateFrom": f"{DATE_FROM} 00:00", "dateTo": f"{DATE_TO_NEXT} 00:00", "status": "Tersanggah", "_": int(time.time() * 1000)}
+    # An old violation can be newly disputed, so use the historical baseline
+    # rather than only the violation date's 14-day lookback.
+    p = {"dateFrom": f"{FULL_DATE_FROM} 00:00", "dateTo": f"{DATE_TO_NEXT} 00:00", "status": "Tersanggah", "_": int(time.time() * 1000)}
     parsed = browser_fetch(page, URL_DISPUTES + "?" + urlencode(p))
     rows = parsed.get("data", [])
     if not isinstance(rows, list): raise RuntimeError("JSON Tersanggah tidak dikenali")
@@ -1517,6 +1687,15 @@ def main():
             # Satu login, empat sumber.
             summaries["shipping"] = sync_shipping(page, supabase)
             shipping_seen_refs = set(summaries["shipping"].pop("_seen_refs", []))
+            # Historical shipping status changes may affect old printed dates.
+            # This cheap source-only check never reopens printed_detail/photos.
+            try:
+                historical = sync_shipping_historical_statuses(page, supabase)
+                summaries["shipping"]["new_items"].extend(historical.pop("new_items", []))
+                summaries["shipping_historical"] = historical
+            except Exception as exc:
+                log("::warning::Historical shipping check failed: " + type(exc).__name__)
+                summaries["shipping_historical"] = {"warning": type(exc).__name__}
             summaries["disputes"] = sync_disputes(page, supabase)
             summaries["blanko"] = sync_blanko(page, supabase)
             summaries["terminated"] = sync_terminated(page, supabase)

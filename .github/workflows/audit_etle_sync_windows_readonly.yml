@@ -2,7 +2,7 @@ name: Audit ETLE Source Coverage (Read Only)
 on:
   push:
     branches: [main]
-    paths: [audit_etle_sync_windows_readonly.py]
+    paths: [audit_etle_sync_windows_readonly.py, sync_etle.py]
   workflow_dispatch:
 permissions:
   contents: read
