@@ -1,0 +1,31 @@
+name: Audit Sumber Alasan Sanggahan Tanpa Data Pribadi
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'diagnose_dispute_reason_shape.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  safe-reason-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --disable-pip-version-check playwright requests
+          python -m playwright install --with-deps chromium
+      - name: Summarize reason structure without copying private values
+        env:
+          EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
+          PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python diagnose_dispute_reason_shape.py
+# Read-only audit. No documents or fields uploaded. No artifacts, screenshots,
+# case IDs, names, URLs, reasons, or document contents in outputs.

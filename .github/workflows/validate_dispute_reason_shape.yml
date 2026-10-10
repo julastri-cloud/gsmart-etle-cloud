@@ -1,0 +1,24 @@
+name: Validate Safe Dispute Reason Diagnostic
+on:
+  pull_request:
+    paths:
+      - 'diagnose_dispute_reason_shape.py'
+      - 'test_dispute_reason_shape.py'
+      - '.github/workflows/diagnose_dispute_reason_shape.yml'
+      - '.github/workflows/validate_dispute_reason_shape.yml'
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test-only module requirements
+        run: python -m pip install --disable-pip-version-check requests
+      - name: Check audit syntax and privacy
+        run: |
+          python -m py_compile diagnose_dispute_reason_shape.py
+          python -m unittest -q test_dispute_reason_shape.py
