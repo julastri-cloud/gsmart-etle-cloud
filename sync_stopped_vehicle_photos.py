@@ -24,8 +24,9 @@ ID_RE=re.compile(r"^[0-9]{1,12}$")
 BASE_RE=re.compile(r"^https://[a-z0-9-]+\.supabase\.co$")
 PHOTO_JS=r"""
 () => {
- const img=document.querySelector("#foto_bukti_frame");
- if(!img||img.tagName!=="IMG")return {available:false};
+ const frame=document.querySelector("#foto_bukti_frame");
+ const img=frame?.tagName==="IMG"?frame:frame?.querySelector("img");
+ if(!img)return {available:false};
  const src=img.currentSrc||img.src||img.getAttribute("src")||"";
  return {
    available:img.complete&&img.naturalWidth>=800&&img.naturalHeight>=500,
@@ -160,8 +161,9 @@ def run():
     records=read_stopped(base,key)
     old_state=read_previous(base,key)
     now=datetime.now(timezone.utc)
+    force_recheck=os.getenv("STOPPED_PHOTO_FORCE","false").strip().lower()=="true"
     candidates=[r for r in records
-                if r.get("case_id") and due(old_state.get(r["case_id"]),now)][:limit]
+                if r.get("case_id") and (force_recheck or due(old_state.get(r["case_id"]),now))][:limit]
     metrics={"stopped_records":len(records),"already_checked":len(old_state),
              "selected":len(candidates),"photo_available":0,"photo_unavailable":0,"failed":0}
     if candidates:
