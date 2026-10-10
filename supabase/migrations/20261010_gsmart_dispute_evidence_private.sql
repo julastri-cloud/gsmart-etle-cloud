@@ -13,11 +13,11 @@ create table if not exists public.gsmart_dispute_evidence_private (
   updated_at timestamptz not null default now(),
   constraint gsmart_private_sim_path_chk check (
     sim_object_path is null or
-    (sim_object_path ~ ('^' || case_id::text || '/sim/[A-Za-z0-9_.-]{1,100}\\.(jpg|jpeg|png|webp)$'))
+    (sim_object_path ~ ('^' || case_id::text || '/sim/[A-Za-z0-9_.-]{1,100}[.](jpg|jpeg|png|webp)$'))
   ),
   constraint gsmart_private_doc_path_chk check (
     document_object_path is null or
-    (document_object_path ~ ('^' || case_id::text || '/document/[A-Za-z0-9_.-]{1,100}\\.(jpg|jpeg|png|webp|pdf)$'))
+    (document_object_path ~ ('^' || case_id::text || '/document/[A-Za-z0-9_.-]{1,100}[.](jpg|jpeg|png|webp|pdf)$'))
   )
 );
 alter table public.gsmart_dispute_evidence_private enable row level security;
