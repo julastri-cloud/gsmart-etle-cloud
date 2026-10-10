@@ -138,6 +138,22 @@ def upsert_private(base,key,record):
         raise RuntimeError("PRIVATE_METADATA_WRITE_FAILED")
 
 
+def select_loaded_media(items, kind):
+    """Reject icon/placeholder images; source must already be ETLE-allowlisted."""
+    if kind not in ("sim","document"):
+        raise ValueError("INVALID_MEDIA_KIND")
+    for item in (items or []):
+        if item.get("kind")!="img" or item.get("loaded") is not True:
+            continue
+        width, height=int(item.get("width") or 0), int(item.get("height") or 0)
+        if width < 260 or height < 120:
+            continue
+        if not item.get("source"):
+            continue
+        return item
+    return None
+
+
 def import_case_with_page(page, base, key, violation_id, expected_case_id=None):
     """Use an already authenticated ETLE browser for one verified dispute.
 
@@ -167,8 +183,8 @@ def import_case_with_page(page, base, key, violation_id, expected_case_id=None):
     if not private["detail_present"]:
         raise RuntimeError("DETAIL_STRUCTURE_INVALID")
 
-    sim_candidate=next((x for x in private["sim_candidates"] if x["loaded"] is True),None)
-    doc_candidate=next((x for x in private["document_candidates"] if x["loaded"] is True),None)
+    sim_candidate=select_loaded_media(private["sim_candidates"],"sim")
+    doc_candidate=select_loaded_media(private["document_candidates"],"document")
     if not sim_candidate and not doc_candidate and not private["offender"] and not private["reason"]:
         if not old:
             raise RuntimeError("NO_EVIDENCE_DATA")
