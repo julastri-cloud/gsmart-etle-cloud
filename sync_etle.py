@@ -187,6 +187,21 @@ def upsert(supabase, table, row, conflict):
     return supabase.table(table).upsert(row, on_conflict=conflict).execute().data
 
 
+def select_all_pages(supabase, table, fields, page_size=1000, max_rows=10000):
+    """Do not silently truncate table reads at PostgREST's default 1000 rows."""
+    rows = []
+    for offset in range(0, max_rows, page_size):
+        batch = supabase.table(table).select(fields).range(
+            offset, offset + page_size - 1
+        ).execute().data
+        if not isinstance(batch, list):
+            raise RuntimeError("SUPABASE_PAGINATION_INVALID")
+        rows.extend(batch)
+        if len(batch) < page_size:
+            return rows
+    raise RuntimeError("SUPABASE_PAGINATION_LIMIT")
+
+
 def update_sync_state(supabase, module, status="SUCCESS"):
     upsert(supabase, "gsmart_sync_state", {
         "module": module,
@@ -544,11 +559,8 @@ def reconcile_shipping_archives(supabase, seen_refs):
     if SYNC_MODE != "full":
         return {"checked": 0, "missing": 0, "archived": 0}
 
-    shipping_rows = (
-        supabase.table("etle_shipping")
-        .select("case_id,ref_number,printed_date")
-        .execute()
-        .data
+    shipping_rows = select_all_pages(
+        supabase, "etle_shipping", "case_id,ref_number,printed_date"
     )
     from_date = ddmmyyyy_to_iso(DATE_FROM)
     shipping_rows = [
@@ -559,7 +571,7 @@ def reconcile_shipping_archives(supabase, seen_refs):
 
     downstream = set()
     for table in ("etle_disputes", "etle_terminated_cases", "etle_court_info"):
-        rows = supabase.table(table).select("case_id").execute().data
+        rows = select_all_pages(supabase, table, "case_id")
         downstream.update(x.get("case_id") for x in rows if x.get("case_id"))
     blanko_rows = (
         supabase.table("etle_cases")
@@ -572,6 +584,19 @@ def reconcile_shipping_archives(supabase, seen_refs):
     by_case = {}
     for row in shipping_rows:
         by_case[row["case_id"]] = row
+
+    # Full archive decisions are unsafe when an ETLE source page is empty
+    # or massively truncated. A short/incomplete response must not count
+    # toward two consecutive missing-full-sync confirmations.
+    saved_refs = {clean(x.get("ref_number")) for x in shipping_rows
+                  if clean(x.get("ref_number"))}
+    if saved_refs:
+        overlap = len(saved_refs & seen_refs)
+        min_overlap = max(5, int(len(saved_refs) * 0.7)) if len(saved_refs) >= 10 else 1
+        if overlap < min_overlap:
+            log("::warning::Shipping archive reconciliation skipped: source snapshot incomplete")
+            return {"checked": 0, "missing": 0, "archived": 0,
+                    "downstream_cleared": 0, "skipped": "source_snapshot_incomplete"}
 
     checked = missing = archived = downstream_cleared = 0
     for case_id, row in by_case.items():
@@ -691,7 +716,11 @@ def get_printed_list(page):
             raise RuntimeError("JSON Surat Dicetak tidak dikenali")
         rows.extend(batch)
         log(f"Shipping API: {len(rows)}/{total}")
-        if not batch or len(rows) >= total:
+        if not batch:
+            if len(rows) < total:
+                raise RuntimeError("Shipping API pagination stopped before recordsFiltered")
+            break
+        if len(rows) >= total:
             break
         start += len(batch)
         draw += 1
