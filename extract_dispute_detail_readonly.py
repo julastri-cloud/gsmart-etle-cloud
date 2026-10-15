@@ -102,10 +102,13 @@ EXTRACTION_JS = r"""
   const _legacyReasonContainer=document.querySelector("#alasanLainnya");
   const media = node => {
     if (!node) return [];
-    const nodes=[...node.querySelectorAll("img[src],a[href],object[data],embed[src],iframe[src]")].slice(0,8);
+    const nodes=[...node.querySelectorAll("img[src],img[data-src],a[href],object[data],embed[src],iframe[src]")].slice(0,16);
     return nodes.map(el => ({
       kind:el.tagName.toLowerCase(),
-      reference:el.getAttribute("src") || el.getAttribute("href") || el.getAttribute("data") || "",
+      reference:el.getAttribute("data-src") || el.getAttribute("src") || el.getAttribute("href") || el.getAttribute("data") || "",
+      // Only a short label; never retain or print HTML/identification data.
+      label:el.tagName.toLowerCase()==="a"
+        ?clean(el.getAttribute("aria-label") || el.getAttribute("title") || el.innerText).slice(0,80):"",
       loaded:el.tagName.toLowerCase() === "img" ? (el.complete && el.naturalWidth > 0) : null,
       width:el.tagName.toLowerCase() === "img" ? el.naturalWidth : 0,
       height:el.tagName.toLowerCase() === "img" ? el.naturalHeight : 0
@@ -117,7 +120,7 @@ EXTRACTION_JS = r"""
     offender:fields,
     reason,
     explanation,
-    sim_candidates:media(root).filter(x=>x.kind==="img"),
+    sim_candidates:media(root).filter(x=>x.kind==="img" || (x.kind==="a" && /(?:foto|gambar|lampiran|lihat|unduh|download)?\s*sim\b/i.test(x.label))),
     document_candidates:media(evidence),
     vehicle_exists:!!vehicle,
     vehicle_image_loaded:vehicle?.tagName?.toLowerCase()==="img" ? (vehicle.complete && vehicle.naturalWidth > 0) : null
@@ -126,14 +129,14 @@ EXTRACTION_JS = r"""
 """
 
 
-def safe_etle_media_url(reference):
+def safe_etle_media_url(reference, base=DETAIL_URL):
     """Resolve only authenticated ETLE-origin HTTPS URLs; reject arbitrary hosts."""
     if not isinstance(reference, str) or not reference.strip():
         return None
     if len(reference) > 4096:
         return None
     try:
-        url = urljoin(DETAIL_URL, reference.strip())
+        url = urljoin(base, reference.strip())
         p = urlsplit(url)
         if (
             p.scheme != "https"
@@ -163,7 +166,7 @@ def normalize_private_extraction(raw):
                 if isinstance(fields.get(key), str) and fields[key].strip()}
     def media(items):
         return [
-            {"kind": item.get("kind"), "source": url, "loaded": item.get("loaded"),
+            {"kind": item.get("kind"), "source": url, "label": str(item.get("label") or "")[:80], "loaded": item.get("loaded"),
              "width": int(item.get("width") or 0), "height": int(item.get("height") or 0)}
             for item in (items if isinstance(items,list) else [])[:MAX_MEDIA]
             if isinstance(item,dict)

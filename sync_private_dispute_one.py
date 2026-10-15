@@ -15,7 +15,7 @@ from urllib.parse import quote, urlsplit
 import requests
 from diagnose_dispute_detail_safe import LOGIN_URL, detail_url
 from extract_dispute_detail_readonly import (
-    EXTRACTION_JS, normalize_private_extraction,
+    EXTRACTION_JS, normalize_private_extraction, safe_etle_media_url,
 )
 
 BUCKET = "gsmart-dispute-private"
@@ -87,7 +87,16 @@ def fetch_evidence(context, candidate, kind):
     p=urlsplit(url)
     if p.scheme!="https" or p.hostname!="etilang-djpd.kemenhub.go.id" or p.port!=9000:
         raise RuntimeError("UNSAFE_MEDIA_ORIGIN")
-    response=context.request.get(url,timeout=30000,fail_on_status_code=False)
+    # Never automatically follow a redirect to an untrusted host.
+    for _ in range(4):
+        response=context.request.get(url,timeout=30000,fail_on_status_code=False,max_redirects=0)
+        if response.status not in (301,302,303,307,308):
+            break
+        location=response.headers.get("location")
+        redirected=safe_etle_media_url(location,base=url)
+        if not redirected:
+            raise RuntimeError("UNSAFE_EVIDENCE_REDIRECT")
+        url=redirected
     if response.status != 200:
         raise RuntimeError("EVIDENCE_HTTP_FAILED")
     try:
@@ -138,20 +147,47 @@ def upsert_private(base,key,record):
         raise RuntimeError("PRIVATE_METADATA_WRITE_FAILED")
 
 
-def select_loaded_media(items, kind):
-    """Reject icon/placeholder images; source must already be ETLE-allowlisted."""
+def evidence_candidates(items, kind):
+    """Only scoped ETLE evidence references, never unrelated page links.
+
+    Prefer visibly loaded images. Allow links (including PDF) and lazy images,
+    checking the actual bytes and MIME before any private upload.
+    """
     if kind not in ("sim","document"):
         raise ValueError("INVALID_MEDIA_KIND")
-    for item in (items or []):
-        if item.get("kind")!="img" or item.get("loaded") is not True:
+    ranked=[]
+    for candidate in items or []:
+        if not candidate.get("source"):
             continue
-        width, height=int(item.get("width") or 0), int(item.get("height") or 0)
-        if width < 260 or height < 120:
+        tag=candidate.get("kind")
+        if tag=="img":
+            width=int(candidate.get("width") or 0)
+            height=int(candidate.get("height") or 0)
+            loaded=candidate.get("loaded") is True
+            if loaded and (width<260 or height<120):
+                continue
+            if not loaded and kind=="sim":
+                # Avoid selecting logos/icons in Data Pelanggar unless SIM-labeled.
+                label=str(candidate.get("label") or "")
+                source=str(candidate.get("source") or "")
+                if not re.search(r"sim",label+" "+urlsplit(source).path,re.I):
+                    continue
+            rank=0 if loaded else 2
+        elif tag in ("a","object","embed","iframe"):
+            if kind=="sim" and tag!="a":
+                continue
+            if kind=="sim" and not re.search(r"\bsim\b",str(candidate.get("label") or ""),re.I):
+                continue
+            rank=1
+        else:
             continue
-        if not item.get("source"):
-            continue
-        return item
-    return None
+        ranked.append((rank,candidate))
+    return [c for _,c in sorted(ranked,key=lambda entry:entry[0])]
+
+
+def select_loaded_media(items,kind):
+    """Backward-compatible first candidate; downloader tries all fallbacks."""
+    return next(iter(evidence_candidates(items,kind)),None)
 
 
 def import_case_with_page(page, base, key, violation_id, expected_case_id=None):
@@ -183,23 +219,30 @@ def import_case_with_page(page, base, key, violation_id, expected_case_id=None):
     if not private["detail_present"]:
         raise RuntimeError("DETAIL_STRUCTURE_INVALID")
 
-    sim_candidate=select_loaded_media(private["sim_candidates"],"sim")
-    doc_candidate=select_loaded_media(private["document_candidates"],"document")
-    if not sim_candidate and not doc_candidate and not private["offender"] and not private["reason"] and not private.get("explanation"):
+    sim_candidates=evidence_candidates(private["sim_candidates"],"sim")
+    doc_candidates=evidence_candidates(private["document_candidates"],"document")
+    if not sim_candidates and not doc_candidates and not private["offender"] and not private["reason"] and not private.get("explanation"):
         if not old:
             raise RuntimeError("NO_EVIDENCE_DATA")
 
     media_errors=0
     extracted={}
-    for kind,candidate in (("sim",sim_candidate),("document",doc_candidate)):
-        if candidate:
+    for kind,candidates in (("sim",sim_candidates),("document",doc_candidates)):
+        if old.get(kind+"_object_path"):
+            # Retain already archived evidence without redundant downloads.
+            continue
+        if not candidates:
+            continue
+        for candidate in candidates:
             try:
                 data=fetch_evidence(page.context,candidate,kind)
                 extracted[kind]=upload_private(base,key,case_id,kind,data)
+                break
             except Exception:
-                # One unavailable document must not destroy an existing saved
-                # SIM or cause other valid evidence to be dropped.
-                media_errors+=1
+                # Never print private URLs/response content. Try next scoped source.
+                continue
+        if not extracted.get(kind):
+            media_errors+=1
 
     now=datetime.now(timezone.utc).isoformat()
     record={
@@ -219,7 +262,7 @@ def import_case_with_page(page, base, key, violation_id, expected_case_id=None):
         raise RuntimeError("NO_EVIDENCE_DATA")
     upsert_private(base,key,record)
     return {
-        "result":"PARTIAL" if media_errors else "SUCCESS",
+        "result":"PARTIAL" if media_errors or not (record["sim_object_path"] and record["document_object_path"]) else "SUCCESS",
         "media_errors":media_errors,
         "field_count":len(record["offender_data"]),
         "reason_present":bool(record["dispute_reason"]),
