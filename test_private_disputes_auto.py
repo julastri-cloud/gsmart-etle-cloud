@@ -137,6 +137,68 @@ class AutoPrivateEvidenceTests(unittest.TestCase):
         self.assertIsNone(utc_time("bad timestamp"))
         self.assertIsNotNone(utc_time(NOW.isoformat()))
 
+    def test_incomplete_recent_media_can_be_forced_once(self):
+        dispute={"case_id":A,"violation_id":"80971"}
+        current={"source_checked_at":NOW.isoformat(),"offender_data":True,
+                 "dispute_reason":True,"dispute_explanation":True,
+                 "sim_object_path":False,"document_object_path":False}
+        self.assertFalse(eligible(dispute,current,NOW))
+        self.assertTrue(eligible(dispute,current,NOW,force_missing_media=True))
+        self.assertEqual(len(select_batch([dispute],{A:current},NOW,12,force_missing_media=True)),1)
+        self.assertFalse(eligible(dispute,{**current,"sim_object_path":True,"document_object_path":True},
+                                  NOW,force_missing_media=True))
+
+    def test_pdf_document_link_and_sim_label_can_be_selected(self):
+        from sync_private_dispute_one import evidence_candidates
+        entries=[
+          {"kind":"img","loaded":True,"width":30,"height":30,"source":"https://etilang-djpd.kemenhub.go.id:9000/icon.png"},
+          {"kind":"a","label":"Unduh Dokumen Sanggahan","source":"https://etilang-djpd.kemenhub.go.id:9000/document.pdf"},
+          {"kind":"a","label":"Lihat Foto SIM","source":"https://etilang-djpd.kemenhub.go.id:9000/sim.jpg"},
+        ]
+        self.assertEqual(len(evidence_candidates(entries,"document")),2)
+        self.assertEqual(len(evidence_candidates(entries,"sim")),1)
+        self.assertEqual(evidence_candidates(entries,"sim")[0]["label"],"Lihat Foto SIM")
+
+    def test_cross_origin_redirect_is_rejected_without_follow(self):
+        from sync_private_dispute_one import fetch_evidence
+        c=Mock()
+        c.request.get.return_value=Mock(status=302,headers={"location":"https://evil.example/steal.pdf"})
+        with self.assertRaisesRegex(RuntimeError,"UNSAFE_EVIDENCE_REDIRECT"):
+            fetch_evidence(c,{"source":"https://etilang-djpd.kemenhub.go.id:9000/media"},"document")
+        self.assertEqual(c.request.get.call_count,1)
+        self.assertEqual(c.request.get.call_args.kwargs["max_redirects"],0)
+
+    def test_scoped_pdf_redirect_download_uses_magic_bytes(self):
+        from sync_private_dispute_one import fetch_evidence
+        from extract_dispute_detail_readonly import safe_etle_media_url
+        c=Mock()
+        data=b"%PDF-1.4 synthetic document"
+        response=Mock(status=200,headers={"content-length":str(len(data))})
+        response.body.return_value=data
+        c.request.get.side_effect=[Mock(status=302,headers={"location":"/files/document.pdf"}),response]
+        res=fetch_evidence(c,{"source":"https://etilang-djpd.kemenhub.go.id:9000/redirect"},"document")
+        self.assertEqual(res[1:],("pdf","application/pdf"))
+        self.assertEqual(c.request.get.call_args.args[0],"https://etilang-djpd.kemenhub.go.id:9000/files/document.pdf")
+        self.assertIsNone(safe_etle_media_url("//evil.example/document.pdf"))
+        self.assertIn('img[data-src]',EXTRACTION_JS)
+        self.assertIn('document_candidates:media(evidence)',EXTRACTION_JS)
+
+    def test_missing_media_is_partial_even_with_successful_text(self):
+        page=Mock()
+        page.goto.return_value=Mock(status=200)
+        page.url="https://etilang-djpd.kemenhub.go.id:9000/admin-etle/terkonfirmasi_detail.php?id=80971"
+        page.evaluate.return_value={}
+        raw={"detail_present":True,"offender":{"nama":"synthetic"},
+             "reason":"synthetic","explanation":"synthetic","sim_candidates":[],"document_candidates":[]}
+        with patch("sync_private_dispute_one.resolve_case",return_value=A),\
+             patch("sync_private_dispute_one.db_get",return_value=[]),\
+             patch("sync_private_dispute_one.normalize_private_extraction",return_value=raw),\
+             patch("sync_private_dispute_one.upsert_private"):
+            outcome=import_case_with_page(page,"https://demo.supabase.co","synthetic-key","80971",A)
+        self.assertEqual(outcome["result"],"PARTIAL")
+        self.assertFalse(outcome["sim_saved_private"])
+        self.assertFalse(outcome["document_saved_private"])
+
 
 if __name__=="__main__":
     unittest.main()
