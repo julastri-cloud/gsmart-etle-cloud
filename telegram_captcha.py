@@ -14,7 +14,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any
 
-import requests
 
 
 class TelegramCaptchaError(RuntimeError):
@@ -29,19 +28,25 @@ class TelegramCaptchaClient:
         *,
         wait_seconds: int = 300,
         poll_seconds: int = 4,
-        http: Any = requests,
+        http: Any = None,
     ) -> None:
         self.token = (token or "").strip()
         self.chat_id = (chat_id or "").strip()
         self.wait_seconds = max(1, min(int(wait_seconds), 600))
         self.poll_seconds = max(1, min(int(poll_seconds), 10))
-        self.http = http
         if not self.token or not self.chat_id:
             raise TelegramCaptchaError("TELEGRAM_CONFIGURATION_MISSING")
         try:
             self.owner_id = int(self.chat_id)
         except ValueError as exc:
             raise TelegramCaptchaError("TELEGRAM_CHAT_ID_INVALID") from exc
+        if http is None:
+            try:
+                import requests as http_client
+            except ImportError:
+                raise TelegramCaptchaError("TELEGRAM_HTTP_DEPENDENCY_MISSING") from None
+            http = http_client
+        self.http = http
 
     def _url(self, method: str) -> str:
         return f"https://api.telegram.org/bot{self.token}/{method}"
