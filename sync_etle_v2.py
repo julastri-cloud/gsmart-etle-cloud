@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 from supabase import create_client
+from telegram_captcha import login_with_telegram_captcha
 
 load_dotenv()
 WIB = ZoneInfo("Asia/Jakarta")
@@ -114,18 +115,9 @@ def validate_tables(supabase):
     log("Semua tabel utama tersedia.")
 
 def login_etle(page):
-    log("Membuka halaman login ETLE...")
-    page.goto(URL_LOGIN, wait_until="domcontentloaded", timeout=60000)
-    email = page.locator('input[placeholder="Email"]')
-    password = page.locator('input[placeholder="Password"]')
-    email.wait_for(state="visible", timeout=30000)
-    password.wait_for(state="visible", timeout=30000)
-    email.fill(EMAIL_ETLE); password.fill(PASSWORD_ETLE)
-    page.locator('button:has-text("Login")').click()
-    try: page.wait_for_load_state("networkidle", timeout=30000)
-    except Exception: pass
-    page.wait_for_timeout(2000)
-    if "/main/" in page.url: raise RuntimeError("Login ETLE gagal.")
+    log("Membuka login ETLE; CAPTCHA akan dikirim ke Telegram bila diminta...")
+    login_with_telegram_captcha(page, EMAIL_ETLE, PASSWORD_ETLE,
+        login_url=URL_LOGIN, run_label="sync-etle-v2")
     log("Login ETLE berhasil.")
 
 def open_blanko_page(page):

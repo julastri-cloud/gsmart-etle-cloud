@@ -82,6 +82,8 @@ MEDIA_STRUCTURE_JS = r"""
 """
 
 def run(detail_id):
+    # Validate user-supplied ID before browser startup or ETLE authentication.
+    target_url = build_detail_url(detail_id)
     from playwright.sync_api import sync_playwright
     email=os.getenv("EMAIL_ETLE","").strip()
     password=os.getenv("PASSWORD_ETLE","").strip()
@@ -90,15 +92,12 @@ def run(detail_id):
         browser=pw.chromium.launch(headless=True)
         try:
             page=browser.new_page(viewport={"width":1365,"height":900})
-            page.goto(LOGIN_URL,wait_until="domcontentloaded",timeout=60000)
-            page.locator('input[placeholder="Email"]').fill(email,timeout=30000)
-            page.locator('input[placeholder="Password"]').fill(password,timeout=30000)
-            page.locator('button:has-text("Login")').click(timeout=30000)
-            try:page.wait_for_load_state("networkidle",timeout=20000)
-            except Exception:pass
-            page.wait_for_timeout(1300)
-            if "/main/" in page.url:raise RuntimeError("ETLE_LOGIN_FAILED")
-            response=page.goto(build_detail_url(detail_id),wait_until="domcontentloaded",timeout=60000)
+            from telegram_captcha import login_with_telegram_captcha
+            login_with_telegram_captcha(
+                page, email, password,
+                login_url=LOGIN_URL, run_label="diagnose-stopped-vehicle-photo",
+            )
+            response=page.goto(target_url,wait_until="domcontentloaded",timeout=60000)
             try:page.wait_for_load_state("networkidle",timeout=15000)
             except Exception:pass
             page.wait_for_timeout(2200)

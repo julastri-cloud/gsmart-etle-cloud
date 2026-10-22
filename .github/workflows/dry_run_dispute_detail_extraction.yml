@@ -26,12 +26,15 @@ jobs:
           python -m unittest -q test_dispute_detail_extraction_readonly.py
       - name: Pasang Playwright Chromium
         run: |
-          python -m pip install --disable-pip-version-check playwright
+          python -m pip install --disable-pip-version-check playwright requests
           python -m playwright install --with-deps chromium
       - name: Periksa ekstraksi in-memory (hanya laporan nonpribadi)
         env:
           EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
           PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          CAPTCHA_WAIT_SECONDS: '300'
           DETAIL_ID: ${{ inputs.detail_id }}
         run: python extract_dispute_detail_readonly.py
 # Tidak memakai secret Supabase, tidak menulis database, tidak menyimpan

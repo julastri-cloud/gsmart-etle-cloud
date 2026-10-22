@@ -2,6 +2,7 @@ import os, json, re
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
 from supabase import create_client
+from telegram_captcha import login_with_telegram_captcha
 
 BASE = "https://etilang-djpd.kemenhub.go.id:9000"
 LOGIN = BASE + "/main/"
@@ -32,17 +33,8 @@ def num(v):
     return float(m.group(0).replace(",", ".")) if m else None
 
 def login(page):
-    page.goto(LOGIN, wait_until="domcontentloaded", timeout=60000)
-    page.locator('input[placeholder="Email"]').fill(EMAIL)
-    page.locator('input[placeholder="Password"]').fill(PASSWORD)
-    page.locator('button:has-text("Login")').click()
-    try:
-        page.wait_for_load_state("networkidle", timeout=30000)
-    except Exception:
-        pass
-    page.wait_for_timeout(1000)
-    if "/main/" in page.url:
-        raise RuntimeError("Login ETLE gagal")
+    login_with_telegram_captcha(page, EMAIL, PASSWORD,
+        login_url=LOGIN, run_label="sync-single-blue")
 
 def detail_url():
     return BASE + "/admin-etle/printed_detail.php?" + urlencode({

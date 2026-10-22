@@ -167,6 +167,8 @@ def detail_report_ok(result):
 
 
 def run(detail_id):
+    # Validate user-supplied ID before browser startup or ETLE authentication.
+    target_url = detail_url(detail_id)
     from playwright.sync_api import sync_playwright
 
     email = os.getenv("EMAIL_ETLE", "").strip()
@@ -178,19 +180,13 @@ def run(detail_id):
         browser = playwright.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={"width": 1365, "height": 900})
-            page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
-            page.locator('input[placeholder="Email"]').fill(email, timeout=30000)
-            page.locator('input[placeholder="Password"]').fill(password, timeout=30000)
-            page.locator('button:has-text("Login")').click(timeout=30000)
-            try:
-                page.wait_for_load_state("networkidle", timeout=30000)
-            except Exception:
-                pass
-            page.wait_for_timeout(1500)
-            if "/main/" in page.url:
-                raise RuntimeError("Sesi login ETLE tidak berhasil.")
+            from telegram_captcha import login_with_telegram_captcha
+            login_with_telegram_captcha(
+                page, email, password,
+                login_url=LOGIN_URL, run_label="diagnose-dispute-detail",
+            )
             print("ETLE login: berhasil (tanpa informasi akun).", flush=True)
-            response=page.goto(detail_url(detail_id),wait_until="domcontentloaded",timeout=60000)
+            response=page.goto(target_url,wait_until="domcontentloaded",timeout=60000)
             page.wait_for_timeout(2500)
             if "/main/" in page.url:
                 raise RuntimeError("Halaman detail meminta login ulang.")

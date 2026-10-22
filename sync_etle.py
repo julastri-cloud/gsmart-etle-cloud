@@ -246,22 +246,13 @@ def write_sync_log(supabase, module, started_at, status, found=0, updated=0, fai
 # ETLE LOGIN / FETCH
 # ============================================================
 def login_etle(page):
+    from telegram_captcha import login_with_telegram_captcha
+
     log("Login ETLE...")
-    page.goto(URL_LOGIN, wait_until="domcontentloaded", timeout=60000)
-    email = page.locator('input[placeholder="Email"]')
-    password = page.locator('input[placeholder="Password"]')
-    email.wait_for(state="visible", timeout=30000)
-    password.wait_for(state="visible", timeout=30000)
-    email.fill(EMAIL_ETLE)
-    password.fill(PASSWORD_ETLE)
-    page.locator('button:has-text("Login")').click()
-    try:
-        page.wait_for_load_state("networkidle", timeout=30000)
-    except Exception:
-        pass
-    page.wait_for_timeout(1500)
-    if "/main/" in page.url:
-        raise RuntimeError("Login ETLE gagal")
+    login_with_telegram_captcha(
+        page, EMAIL_ETLE, PASSWORD_ETLE,
+        login_url=URL_LOGIN, run_label="sync-etle",
+    )
     log("Login ETLE berhasil.")
 
 
