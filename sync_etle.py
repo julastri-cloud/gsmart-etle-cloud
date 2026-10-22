@@ -14,6 +14,7 @@ from playwright.sync_api import sync_playwright
 from supabase import create_client
 
 from firebase_notifier import send_event_notification
+from telegram_captcha import login_with_telegram_captcha
 
 load_dotenv()
 WIB = ZoneInfo("Asia/Jakarta")
@@ -246,23 +247,12 @@ def write_sync_log(supabase, module, started_at, status, found=0, updated=0, fai
 # ETLE LOGIN / FETCH
 # ============================================================
 def login_etle(page):
-    log("Login ETLE...")
-    page.goto(URL_LOGIN, wait_until="domcontentloaded", timeout=60000)
-    email = page.locator('input[placeholder="Email"]')
-    password = page.locator('input[placeholder="Password"]')
-    email.wait_for(state="visible", timeout=30000)
-    password.wait_for(state="visible", timeout=30000)
-    email.fill(EMAIL_ETLE)
-    password.fill(PASSWORD_ETLE)
-    page.locator('button:has-text("Login")').click()
-    try:
-        page.wait_for_load_state("networkidle", timeout=30000)
-    except Exception:
-        pass
-    page.wait_for_timeout(1500)
-    if "/main/" in page.url:
-        raise RuntimeError("Login ETLE gagal")
-    log("Login ETLE berhasil.")
+    log("Login ETLE: menunggu verifikasi CAPTCHA melalui Telegram bila diminta...")
+    login_with_telegram_captcha(
+        page, EMAIL_ETLE, PASSWORD_ETLE,
+        login_url=URL_LOGIN, run_label="sync-supabase",
+    )
+    log("Login ETLE berhasil (status akun tidak dicatat).")
 
 
 def open_blanko_page(page):
