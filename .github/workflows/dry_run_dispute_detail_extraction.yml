@@ -35,9 +35,6 @@ jobs:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           CAPTCHA_WAIT_SECONDS: '300'
-          TG_TOKEN: ${{ secrets.TG_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          CAPTCHA_WAIT_SECONDS: '300'
           DETAIL_ID: ${{ inputs.detail_id }}
         run: python extract_dispute_detail_readonly.py
 # Tidak memakai secret Supabase, tidak menulis database, tidak menyimpan
