@@ -12,6 +12,11 @@ on:
       - "diagnose_dispute_detail_safe.py"
       - "diagnose_terminated_vehicle_photo_safe.py"
       - "sync_stopped_vehicle_photos.py"
+      - "sync_etle_v2.py"
+      - "sync_single_blue.py"
+      - "sync_single_printed_photo.py"
+      - "diagnose_printed_photo.py"
+      - "extract_dispute_detail_readonly.py"
       - "tests/test_telegram_captcha.py"
       - ".github/workflows/test-telegram-captcha.yml"
   pull_request:
@@ -39,6 +44,6 @@ jobs:
       - name: Install minimal dependency
         run: python -m pip install requests
       - name: Check edited Python syntax
-        run: python -m py_compile telegram_captcha.py sync_etle.py sync_private_dispute_one.py diagnose_dispute_detail_safe.py diagnose_terminated_vehicle_photo_safe.py sync_stopped_vehicle_photos.py
+        run: python -m py_compile telegram_captcha.py sync_etle.py sync_etle_v2.py sync_single_blue.py sync_single_printed_photo.py diagnose_printed_photo.py extract_dispute_detail_readonly.py sync_private_dispute_one.py diagnose_dispute_detail_safe.py diagnose_terminated_vehicle_photo_safe.py sync_stopped_vehicle_photos.py
       - name: Run isolated unit tests
         run: python -m unittest discover -s tests -v
