@@ -54,7 +54,7 @@ class TelegramCaptchaClient:
             payload = response.json()
         except Exception as exc:
             # Do not propagate request URLs or raw response bodies: URLs contain the bot token.
-            raise TelegramCaptchaError("TELEGRAM_API_REQUEST_FAILED") from exc
+            raise TelegramCaptchaError("TELEGRAM_API_REQUEST_FAILED") from None
         if not isinstance(payload, dict) or payload.get("ok") is not True:
             raise TelegramCaptchaError("TELEGRAM_API_RESPONSE_INVALID")
         return payload.get("result")
