@@ -7,6 +7,8 @@ is used. It does not persist browser cookies or ETLE session state.
 from __future__ import annotations
 
 import os
+import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -102,7 +104,7 @@ class TelegramCaptchaClient:
         if not isinstance(text, str):
             return None
         answer = "".join(text.split())
-        if not answer or len(answer) > 64:
+        if not re.fullmatch(r"[A-Za-z0-9]{5}", answer or ""):
             return None
         return answer
 
@@ -145,6 +147,67 @@ class TelegramCaptchaClient:
         message_id = self.send_captcha_image(image_path, run_label=run_label)
         return self.wait_for_answer(photo_message_id=message_id)
 
+
+
+def login_with_telegram_captcha(
+    page,
+    email: str,
+    password: str,
+    *,
+    login_url: str,
+    run_label: str,
+    max_attempts: int = 3,
+) -> None:
+    """Log in through the real ETLE form, asking a human for each visible CAPTCHA.
+
+    Success is confirmed only when navigation leaves the /main/ login route.
+    CAPTCHA answers and credentials are never logged or persisted.
+    """
+    attempts = max(1, min(int(max_attempts), 3))
+    page.goto(login_url, wait_until="domcontentloaded", timeout=60000)
+
+    for attempt in range(1, attempts + 1):
+        page.locator('input[placeholder="Email"]').fill(email, timeout=30000)
+        page.locator('input[placeholder="Password"]').fill(password, timeout=30000)
+
+        captcha_image = page.locator("#captchaImg")
+        if captcha_image.count() and captcha_image.is_visible():
+            captcha_input = page.locator('input[name="captcha"]')
+            captcha_input.wait_for(state="visible", timeout=15000)
+            page.wait_for_timeout(300)
+            temp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(prefix="etle-captcha-", suffix=".png", delete=False) as tmp:
+                    temp_path = tmp.name
+                captcha_image.screenshot(path=temp_path, timeout=15000)
+                answer = client_from_environment().request_answer(
+                    temp_path, run_label=f"{run_label}-{attempt}"
+                )
+                if not re.fullmatch(r"[A-Za-z0-9]{5}", answer or ""):
+                    raise TelegramCaptchaError("CAPTCHA_ANSWER_FORMAT_INVALID")
+                captcha_input.fill(answer.upper(), timeout=15000)
+            finally:
+                if temp_path:
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
+
+        page.locator('button[type="submit"].btn-theme').click(timeout=30000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=30000)
+        except Exception:
+            pass
+        page.wait_for_timeout(1500)
+        if "/main/" not in page.url:
+            return
+
+        if attempt < attempts and captcha_image.count() and captcha_image.is_visible():
+            # Refresh the challenge before asking for another human answer.
+            captcha_image.click(timeout=10000)
+            page.wait_for_timeout(500)
+
+    raise TelegramCaptchaError("ETLE_LOGIN_FAILED_OR_DASHBOARD_NOT_REACHED")
 
 def client_from_environment() -> TelegramCaptchaClient:
     token = os.getenv("TG_TOKEN", "")
