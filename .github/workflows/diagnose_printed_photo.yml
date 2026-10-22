@@ -45,13 +45,16 @@ jobs:
       - name: Install Playwright
         run: |
           python -m pip install --upgrade pip
-          pip install playwright
+          pip install playwright requests
           python -m playwright install --with-deps chromium
 
       - name: Run read-only diagnostic
         env:
           EMAIL_ETLE: ${{ secrets.EMAIL_ETLE }}
           PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          CAPTCHA_WAIT_SECONDS: '300'
           TARGET_TNKB: ${{ inputs.target_tnkb }}
           DATE_FROM: ${{ inputs.date_from }}
           DATE_TO: ${{ inputs.date_to }}
