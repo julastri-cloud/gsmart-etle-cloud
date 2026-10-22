@@ -48,6 +48,22 @@ class TelegramCaptchaReplyTests(unittest.TestCase):
             )
         )
 
+    def test_rejects_answer_with_wrong_length(self):
+        update = {"message": {**self.base["message"], "text": "ABC1"}}
+        self.assertIsNone(
+            TelegramCaptchaClient._answer_from_update(
+                update, owner_id=self.owner_id, photo_message_id=self.photo_id
+            )
+        )
+
+    def test_rejects_non_alphanumeric_answer(self):
+        update = {"message": {**self.base["message"], "text": "AB!12"}}
+        self.assertIsNone(
+            TelegramCaptchaClient._answer_from_update(
+                update, owner_id=self.owner_id, photo_message_id=self.photo_id
+            )
+        )
+
     def test_rejects_non_text_reply(self):
         update = {"message": {**self.base["message"], "text": None}}
         self.assertIsNone(
