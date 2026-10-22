@@ -26,7 +26,7 @@ jobs:
           python -m unittest -q test_dispute_detail_extraction_readonly.py
       - name: Pasang Playwright Chromium
         run: |
-          python -m pip install --disable-pip-version-check playwright
+          python -m pip install --disable-pip-version-check playwright requests
           python -m playwright install --with-deps chromium
       - name: Periksa ekstraksi in-memory (hanya laporan nonpribadi)
         env:
