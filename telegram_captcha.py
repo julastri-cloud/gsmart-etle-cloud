@@ -11,6 +11,7 @@ import re
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any
 
 import requests
@@ -160,8 +161,8 @@ def login_with_telegram_captcha(
 ) -> None:
     """Log in through the real ETLE form, asking a human for each visible CAPTCHA.
 
-    Success is confirmed only when navigation leaves the /main/ login route.
-    CAPTCHA answers and credentials are never logged or persisted.
+    Success requires leaving the login route on the same HTTPS host and no
+    visible login form. CAPTCHA answers and credentials are never logged or persisted.
     """
     attempts = max(1, min(int(max_attempts), 3))
     page.goto(login_url, wait_until="domcontentloaded", timeout=60000)
@@ -199,7 +200,30 @@ def login_with_telegram_captcha(
         except Exception:
             pass
         page.wait_for_timeout(1500)
-        if "/main/" not in page.url:
+        expected = urlparse(login_url)
+        current = urlparse(page.url)
+        same_https_host = (
+            current.scheme == "https"
+            and current.hostname == expected.hostname
+            and current.port == expected.port
+        )
+        on_login_route = current.path.rstrip("/").endswith("/main")
+        login_form_visible = False
+        try:
+            for selector in (
+                'input[placeholder="Email"]',
+                'input[placeholder="Password"]',
+                'button[type="submit"].btn-theme',
+            ):
+                locator = page.locator(selector)
+                if locator.count() and locator.first.is_visible():
+                    login_form_visible = True
+                    break
+        except Exception:
+            # Fail closed if the page state cannot be checked safely.
+            raise TelegramCaptchaError("ETLE_LOGIN_STATE_UNVERIFIED") from None
+
+        if same_https_host and not on_login_route and not login_form_visible:
             return
 
         if not (captcha_image.count() and captcha_image.is_visible()):
