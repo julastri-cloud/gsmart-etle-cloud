@@ -5,6 +5,7 @@ import time
 from html import unescape
 from urllib.parse import urlencode, urljoin
 from playwright.sync_api import sync_playwright
+from telegram_captcha import login_with_telegram_captcha
 
 BASE = "https://etilang-djpd.kemenhub.go.id:9000/"
 URL_LOGIN = urljoin(BASE, "main/")
@@ -35,18 +36,8 @@ def norm_plate(v):
     return re.sub(r"\s+", "", str(v or "").upper())
 
 def login(page):
-    page.goto(URL_LOGIN, wait_until="domcontentloaded", timeout=60000)
-    page.locator('input[placeholder="Email"]').wait_for(state="visible", timeout=30000)
-    page.locator('input[placeholder="Email"]').fill(EMAIL_ETLE)
-    page.locator('input[placeholder="Password"]').fill(PASSWORD_ETLE)
-    page.locator('button:has-text("Login")').click()
-    try:
-        page.wait_for_load_state("networkidle", timeout=30000)
-    except Exception:
-        pass
-    page.wait_for_timeout(1500)
-    if "/main/" in page.url:
-        raise RuntimeError("Login ETLE gagal")
+    login_with_telegram_captcha(page, EMAIL_ETLE, PASSWORD_ETLE,
+        login_url=URL_LOGIN, run_label="diagnose-printed-photo")
 
 def build_url(start, draw):
     p = {
