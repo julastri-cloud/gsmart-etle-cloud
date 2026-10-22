@@ -1,0 +1,37 @@
+name: Telegram CAPTCHA helper tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/telegram-captcha-human-in-loop
+    paths:
+      - "telegram_captcha.py"
+      - "tests/test_telegram_captcha.py"
+      - ".github/workflows/test-telegram-captcha.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "telegram_captcha.py"
+      - "tests/test_telegram_captcha.py"
+      - ".github/workflows/test-telegram-captcha.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install minimal dependency
+        run: python -m pip install requests
+      - name: Run isolated unit tests
+        run: python -m unittest discover -s tests -v
