@@ -19,6 +19,9 @@ on:
       - "extract_dispute_detail_readonly.py"
       - "tests/test_telegram_captcha.py"
       - ".github/workflows/test-telegram-captcha.yml"
+      - ".github/workflows/import_private_dispute_one.yml"
+      - ".github/workflows/private_disputes_bootstrap.yml"
+      - ".github/workflows/stopped_vehicle_photo_bootstrap.yml"
   pull_request:
     branches:
       - main
