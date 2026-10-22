@@ -167,6 +167,8 @@ def detail_report_ok(result):
 
 
 def run(detail_id):
+    # Validate user-supplied ID before browser startup or ETLE authentication.
+    target_url = detail_url(detail_id)
     from playwright.sync_api import sync_playwright
 
     email = os.getenv("EMAIL_ETLE", "").strip()
@@ -184,7 +186,7 @@ def run(detail_id):
                 login_url=LOGIN_URL, run_label="diagnose-dispute-detail",
             )
             print("ETLE login: berhasil (tanpa informasi akun).", flush=True)
-            response=page.goto(detail_url(detail_id),wait_until="domcontentloaded",timeout=60000)
+            response=page.goto(target_url,wait_until="domcontentloaded",timeout=60000)
             page.wait_for_timeout(2500)
             if "/main/" in page.url:
                 raise RuntimeError("Halaman detail meminta login ulang.")
