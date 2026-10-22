@@ -202,7 +202,10 @@ def login_with_telegram_captcha(
         if "/main/" not in page.url:
             return
 
-        if attempt < attempts and captcha_image.count() and captcha_image.is_visible():
+        if not (captcha_image.count() and captcha_image.is_visible()):
+            # Without a visible challenge, repeating the same submit could loop on bad credentials.
+            raise TelegramCaptchaError("ETLE_LOGIN_FAILED_OR_DASHBOARD_NOT_REACHED")
+        if attempt < attempts:
             # Refresh the challenge before asking for another human answer.
             captcha_image.click(timeout=10000)
             page.wait_for_timeout(500)
