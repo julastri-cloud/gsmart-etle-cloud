@@ -275,17 +275,12 @@ def import_case_with_page(page, base, key, violation_id, expected_case_id=None):
 
 
 def etle_login(page,email,password):
-    page.goto(LOGIN_URL,wait_until="domcontentloaded",timeout=60000)
-    page.locator('input[placeholder="Email"]').fill(email,timeout=30000)
-    page.locator('input[placeholder="Password"]').fill(password,timeout=30000)
-    page.locator('button:has-text("Login")').click(timeout=30000)
-    try:
-        page.wait_for_load_state("networkidle",timeout=30000)
-    except Exception:
-        pass
-    page.wait_for_timeout(1500)
-    if "/main/" in page.url:
-        raise RuntimeError("LOGIN_FAILED")
+    from telegram_captcha import login_with_telegram_captcha
+
+    login_with_telegram_captcha(
+        page, email, password,
+        login_url=LOGIN_URL, run_label="private-dispute",
+    )
 
 
 def run(violation_id, confirm):
