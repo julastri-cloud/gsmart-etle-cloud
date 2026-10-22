@@ -82,6 +82,8 @@ MEDIA_STRUCTURE_JS = r"""
 """
 
 def run(detail_id):
+    # Validate user-supplied ID before browser startup or ETLE authentication.
+    target_url = build_detail_url(detail_id)
     from playwright.sync_api import sync_playwright
     email=os.getenv("EMAIL_ETLE","").strip()
     password=os.getenv("PASSWORD_ETLE","").strip()
@@ -95,7 +97,7 @@ def run(detail_id):
                 page, email, password,
                 login_url=LOGIN_URL, run_label="diagnose-stopped-vehicle-photo",
             )
-            response=page.goto(build_detail_url(detail_id),wait_until="domcontentloaded",timeout=60000)
+            response=page.goto(target_url,wait_until="domcontentloaded",timeout=60000)
             try:page.wait_for_load_state("networkidle",timeout=15000)
             except Exception:pass
             page.wait_for_timeout(2200)
