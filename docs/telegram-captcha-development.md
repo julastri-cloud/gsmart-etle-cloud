@@ -1,39 +1,46 @@
-# Telegram CAPTCHA integration — development branch
+# Telegram CAPTCHA human-in-the-loop — development notes
 
-Branch: `feature/telegram-captcha-human-in-loop`
+## Current development scope
 
-## Scope of this first commit
+The helper is integrated on branch `feature/telegram-captcha-human-in-loop` into these login entry points:
 
-- Adds a reusable Telegram client that sends a CAPTCHA image to a configured **private** chat.
-- Accepts only a text reply to that exact challenge photo from the configured chat owner.
-- Waits up to `CAPTCHA_WAIT_SECONDS` (default 300 seconds) and fails closed on timeout/API errors.
-- Does not solve CAPTCHA automatically.
-- Does not persist ETLE cookies or browser storage state.
-- Does not change any existing sync script, workflow, database schema, RLS policy, or production secret.
+- `sync_etle.py` — main ETLE synchronization.
+- `sync_private_dispute_one.py` — used by private dispute imports and stopped-vehicle photo sync.
+- `diagnose_dispute_detail_safe.py` — read-only dispute diagnostic.
+- `diagnose_terminated_vehicle_photo_safe.py` — read-only stopped-vehicle diagnostic.
 
-## Configuration (for a future integration test)
+The helper uses the login selectors supplied from the ETLE Hub page:
 
-Set as GitHub Actions secrets:
-- `TG_TOKEN`: token issued by BotFather.
-- `TG_CHAT_ID`: numeric ID of the owner's private Telegram chat.
+- CAPTCHA image: `#captchaImg`
+- CAPTCHA input: `input[name="captcha"]`
+- Login submit button: `button[type="submit"].btn-theme`
 
-Optional environment variable:
-- `CAPTCHA_WAIT_SECONDS`: integer 1–600; default 300.
+It screenshots only the CAPTCHA element to a temporary local file, sends that image to the configured private Telegram chat, and accepts a five-character alphanumeric answer only when the owner replies to that exact challenge photo. The temporary image is deleted after the reply. No CAPTCHA solver is used, and no browser cookies/storage state are persisted by this helper.
 
-Do not commit tokens, session files, CAPTCHA images, or credentials.
+After submission, login is considered successful only if the browser leaves the `/main/` login route. The helper makes at most three human-assisted attempts and stops safely if it cannot reach the dashboard.
 
-## Verification before wiring into production sync scripts
+## Required GitHub Actions secrets
 
-1. Verify the actual ETLE Hub CAPTCHA image/input selectors against the current login page. The current repository code does not identify those selectors, so no guessed selector is silently added here.
-2. Test Telegram API access in an isolated workflow with no ETLE credentials and no Supabase/Fonnte secrets.
-3. Test that unrelated Telegram messages, group messages, and replies to old photos are rejected.
-4. Decide on a protected cross-run session mechanism. Do **not** put raw Playwright `storage_state` files in GitHub Actions cache.
-5. Only then wire the module into each relevant login path and add a manually triggered test workflow with no production writes.
+Configure these repository secrets only when ready to test the feature:
 
-## Local unit tests
+- `TG_TOKEN` — Telegram bot token.
+- `TG_CHAT_ID` — numeric ID of the owner's private chat with the bot.
+- `EMAIL_ETLE` and `PASSWORD_ETLE` — existing ETLE credentials, already required by relevant jobs.
+- `CAPTCHA_WAIT_SECONDS` — optional, defaults to 300 seconds; maximum 600 seconds.
 
-```bash
-python -m unittest discover -s tests -v
-```
+Never paste tokens, passwords, browser cookies, session storage, or private ETLE data into commits, logs, or this PR.
 
-These tests cover reply binding and sender restrictions; they do not test live Telegram or ETLE Hub.
+## Safe verification plan
+
+1. Confirm the branch and draft PR only; do not merge.
+2. Run the isolated unit/syntax workflow. It does not log into ETLE or access Supabase.
+3. Configure Telegram secrets only after confirming the bot is private and the chat ID is correct.
+4. Test one explicitly approved diagnostic first, with no Supabase write path.
+5. Confirm timeout, wrong answer, failed credentials, and dashboard navigation all fail closed.
+6. Only then consider testing a data sync. Review its database writes separately before any production run.
+
+The automated workflow does not itself prove live ETLE login works. A real integration test requires the owner to reply to a CAPTCHA in Telegram and must be run separately from isolated CI tests.
+
+## Production boundary
+
+This branch changes login behavior in scripts but does not change the default branch, production workflows, database schema, RLS, or production secrets. Do not merge or trigger production synchronization without explicit approval.
