@@ -40,7 +40,7 @@ jobs:
           PASSWORD_ETLE: ${{ secrets.PASSWORD_ETLE }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          CAPTCHA_WAIT_SECONDS: '300'
+          CAPTCHA_WAIT_SECONDS: '600'
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
