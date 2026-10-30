@@ -665,7 +665,7 @@ PRINTED_COLUMNS = [
 ]
 
 
-def build_printed_url(start, length, draw):
+def build_printed_url(start, length, draw, *, include_date=True, status_filter="Sudah_Dicetak"):
     p = {
         "draw": draw,
         "order[0][column]": 0,
@@ -674,13 +674,15 @@ def build_printed_url(start, length, draw):
         "length": length,
         "search[value]": "",
         "search[regex]": "false",
-        "date": f"{DATE_FROM} 00:00",
-        "date1": f"{DATE_TO_NEXT} 00:00",
         "selectAll": "no",
         "provinsi": "",
-        "status": "Sudah_Dicetak",
         "_": int(time.time() * 1000),
     }
+    if include_date:
+        p["date"] = f"{DATE_FROM} 00:00"
+        p["date1"] = f"{DATE_TO_NEXT} 00:00"
+    if status_filter is not None:
+        p["status"] = status_filter
     for i, field in enumerate(PRINTED_COLUMNS):
         p[f"columns[{i}][data]"] = field
         p[f"columns[{i}][name]"] = ""
@@ -691,7 +693,39 @@ def build_printed_url(start, length, draw):
     return URL_PRINTED + "?" + urlencode(p)
 
 
+def log_printed_filter_diagnostics(page):
+    # Read-only metadata probes: fetch at most one row and log aggregate counts only.
+    variants = (
+        ("date+status", True, "Sudah_Dicetak"),
+        ("date_only", True, None),
+        ("status_only", False, "Sudah_Dicetak"),
+        ("no_date_no_status", False, None),
+    )
+    for label, include_date, status_filter in variants:
+        parsed = browser_fetch(
+            page,
+            build_printed_url(
+                0, 1, 9000 + len(label),
+                include_date=include_date,
+                status_filter=status_filter,
+            ),
+        )
+        data = parsed.get("data", [])
+        if not isinstance(data, list):
+            raise RuntimeError("JSON diagnostik Surat Dicetak tidak dikenali")
+        log(
+            "Shipping filter diagnostic: "
+            + json.dumps({
+                "variant": label,
+                "records_total": parsed.get("recordsTotal"),
+                "records_filtered": parsed.get("recordsFiltered"),
+                "returned_rows": len(data),
+            }, ensure_ascii=False)
+        )
+
+
 def get_printed_list(page):
+    log_printed_filter_diagnostics(page)
     rows, start, draw = [], 0, 1
     while True:
         parsed = browser_fetch(page, build_printed_url(start, PRINTED_PAGE_SIZE, draw))
