@@ -19,11 +19,35 @@ def log(message):
     print(message, flush=True)
 
 
+def source_shipping_snapshot_diagnostics(rows, seen_refs, historical_refs):
+    required_overlap = max(1, (len(historical_refs) * 7 + 9) // 10)
+    overlap_count = len(seen_refs & historical_refs)
+    return {
+        "source_rows_received": len(rows),
+        "source_unique_refs": len(seen_refs),
+        "historical_unique_refs": len(historical_refs),
+        "overlap_refs": overlap_count,
+        "required_overlap_refs": required_overlap,
+        "overlap_percent": round(
+            overlap_count * 100 / len(historical_refs), 2
+        ) if historical_refs else 100.0,
+        "minimum_overlap_percent": 70,
+        "date_from": core.DATE_FROM,
+        "date_to": core.DATE_TO,
+        "source_rows_nonempty": bool(rows),
+    }
+
+
 def source_shipping_snapshot_is_complete(rows, seen_refs, historical_refs):
-    if not rows:
+    diagnostics = source_shipping_snapshot_diagnostics(
+        rows, seen_refs, historical_refs
+    )
+    if not diagnostics["source_rows_nonempty"]:
         return False
-    min_overlap = max(1, (len(historical_refs) * 7 + 9) // 10)
-    return not historical_refs or len(seen_refs & historical_refs) >= min_overlap
+    return (
+        not historical_refs
+        or diagnostics["overlap_refs"] >= diagnostics["required_overlap_refs"]
+    )
 
 
 def verify_daya_angkut_confirmations(page, supabase):
@@ -51,8 +75,20 @@ def verify_daya_angkut_confirmations(page, supabase):
     # DataTables response is NOT an official transport confirmation.
     historical_refs = {core.clean(x.get("ref_number")) for x in shipping_rows
                        if core.clean(x.get("ref_number"))}
+    snapshot_diagnostics = source_shipping_snapshot_diagnostics(
+        rows, seen_refs, historical_refs
+    )
     if not source_shipping_snapshot_is_complete(rows, seen_refs, historical_refs):
-        raise RuntimeError("SOURCE_SHIPPING_SNAPSHOT_INCOMPLETE")
+        # Only aggregate counts are logged; never emit TNKB, reference numbers,
+        # owner names, addresses, or case identifiers.
+        log(
+            "Source snapshot rejected (aggregate diagnostics only): "
+            + json.dumps(snapshot_diagnostics, ensure_ascii=False)
+        )
+        raise RuntimeError(
+            "SOURCE_SHIPPING_SNAPSHOT_INCOMPLETE: "
+            + json.dumps(snapshot_diagnostics, ensure_ascii=False)
+        )
 
     downstream = set()
     for table in ("etle_disputes", "etle_terminated_cases", "etle_court_info"):
@@ -184,6 +220,7 @@ def verify_daya_angkut_confirmations(page, supabase):
 
     result = {
         "dry_run": DRY_RUN,
+        "source_snapshot": snapshot_diagnostics,
         "source_shipping_found": len(rows),
         "source_refs": len(seen_refs),
         "historical_shipping_cases_checked": len(by_case),
